@@ -22,6 +22,8 @@ class QVTKOpenGLWidget;
 // 前向声明
 namespace DTIFiberLib {
     class DTIFiberRenderer;
+    class TrkFileReader;
+    class FiberBundleRenderer;
 }
 
 class MainWindow : public QMainWindow
@@ -39,7 +41,7 @@ private slots:
     void createStatusBar();
     void setupSimpleWidget();
     void setupVTKWidget();
-    void createSphere();
+    void openTrkFile();
 
 private:
     // UI组件
@@ -49,10 +51,12 @@ private:
     QToolBar *fileToolBar;
     QAction *exitAct;
     QAction *aboutAct;
-    QAction *sphereAct;
+    QAction *openTrkAct;
 
-    // 使用静态库的DTI纤维渲染器
+    // 使用静态库的DTI纤维渲染器和TRK文件读取器
     std::unique_ptr<DTIFiberLib::DTIFiberRenderer> dtiRenderer;
+    std::unique_ptr<DTIFiberLib::TrkFileReader> trkReader;
+    std::unique_ptr<DTIFiberLib::FiberBundleRenderer> fiberRenderer;
 };
 
 #endif // MAINWINDOW_H

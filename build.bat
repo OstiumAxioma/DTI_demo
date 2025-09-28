@@ -2,7 +2,7 @@
 chcp 65001 > nul
 echo.
 echo ========================================
-echo VTK Qt Project Build Script
+echo DTI Fiber Viewer Build Script
 echo ========================================
 echo.
 
@@ -137,14 +137,14 @@ echo.
 
 if %BUILD_DEBUG%==1 if %BUILD_RELEASE%==1 (
     echo Built: Debug and Release configurations
-    echo Debug executable: build\Exe\Debug\VTK_Qt_Project.exe
-    echo Release executable: build\Exe\Release\VTK_Qt_Project.exe
+    echo Debug executable: build\Exe\Debug\DTIFiberViewer.exe
+    echo Release executable: build\Exe\Release\DTIFiberViewer.exe
 ) else if %BUILD_DEBUG%==1 (
     echo Built: Debug configuration only
-    echo Debug executable: build\Exe\Debug\VTK_Qt_Project.exe
+    echo Debug executable: build\Exe\Debug\DTIFiberViewer.exe
 ) else if %BUILD_RELEASE%==1 (
     echo Built: Release configuration only  
-    echo Release executable: build\Exe\Release\VTK_Qt_Project.exe
+    echo Release executable: build\Exe\Release\DTIFiberViewer.exe
 )
 
 echo ========================================
@@ -160,12 +160,12 @@ if /i "%run%"=="y" (
     set "PATH=%PATH%;D:\code\vtk8.2.0\VTK-8.2.0\bin"
     
     REM 根据编译的版本运行
-    if %BUILD_RELEASE%==1 if exist "build\Exe\Release\VTK_Qt_Project.exe" (
+    if %BUILD_RELEASE%==1 if exist "build\Exe\Release\DTIFiberViewer.exe" (
         echo Starting Release version...
-        start "" "build\Exe\Release\VTK_Qt_Project.exe"
-    ) else if %BUILD_DEBUG%==1 if exist "build\Exe\Debug\VTK_Qt_Project.exe" (
+        start "" "build\Exe\Release\DTIFiberViewer.exe"
+    ) else if %BUILD_DEBUG%==1 if exist "build\Exe\Debug\DTIFiberViewer.exe" (
         echo Starting Debug version...
-        start "" "build\Exe\Debug\VTK_Qt_Project.exe"
+        start "" "build\Exe\Debug\DTIFiberViewer.exe"
     )
 )
 

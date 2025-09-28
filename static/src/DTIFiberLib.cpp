@@ -5,9 +5,6 @@
 #include <vtkRenderer.h>
 #include <vtkRenderWindow.h>
 #include <vtkRenderWindowInteractor.h>
-#include <vtkActor.h>
-#include <vtkPolyDataMapper.h>
-#include <vtkSphereSource.h>
 #include <vtkCamera.h>
 
 namespace DTIFiberLib {
@@ -18,9 +15,6 @@ namespace DTIFiberLib {
         vtkSmartPointer<vtkRenderer> renderer;
         vtkSmartPointer<vtkRenderWindow> renderWindow;
         vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor;
-        vtkSmartPointer<vtkActor> actor;
-        vtkSmartPointer<vtkPolyDataMapper> mapper;
-        vtkSmartPointer<vtkSphereSource> sphereSource;
         
         Impl() {
             renderer = vtkSmartPointer<vtkRenderer>::New();
@@ -56,26 +50,6 @@ namespace DTIFiberLib {
         return pImpl->renderer;
     }
 
-    void DTIFiberRenderer::CreateSphere(double radius, int phiResolution, int thetaResolution) {
-        // 创建球体源
-        pImpl->sphereSource = vtkSmartPointer<vtkSphereSource>::New();
-        pImpl->sphereSource->SetRadius(radius);
-        pImpl->sphereSource->SetPhiResolution(phiResolution);
-        pImpl->sphereSource->SetThetaResolution(thetaResolution);
-
-        // 创建映射器
-        pImpl->mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-        pImpl->mapper->SetInputConnection(pImpl->sphereSource->GetOutputPort());
-
-        // 创建演员
-        pImpl->actor = vtkSmartPointer<vtkActor>::New();
-        pImpl->actor->SetMapper(pImpl->mapper);
-
-        // 添加演员到渲染器
-        if (pImpl->renderer) {
-            pImpl->renderer->AddActor(pImpl->actor);
-        }
-    }
 
     void DTIFiberRenderer::ClearActors() {
         if (pImpl->renderer) {

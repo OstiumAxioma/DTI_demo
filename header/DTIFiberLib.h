@@ -7,9 +7,6 @@
 class vtkRenderer;
 class vtkRenderWindow;
 class vtkRenderWindowInteractor;
-class vtkActor;
-class vtkPolyDataMapper;
-class vtkSphereSource;
 
 namespace DTIFiberLib {
 
@@ -26,9 +23,6 @@ namespace DTIFiberLib {
         
         // 获取渲染器
         vtkRenderer* GetRenderer();
-        
-        // 创建球体
-        void CreateSphere(double radius = 1.0, int phiResolution = 20, int thetaResolution = 20);
         
         // 清除所有Actor
         void ClearActors();

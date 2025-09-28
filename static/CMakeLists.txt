@@ -87,10 +87,14 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # 收集源文件
 set(SOURCES
     src/DTIFiberLib.cpp
+    src/TrkFileReader.cpp
+    src/FiberBundleRenderer.cpp
 )
 
 set(HEADERS
     header/DTIFiberLib.h
+    header/TrkFileReader.h
+    header/FiberBundleRenderer.h
 )
 
 # 创建静态库
