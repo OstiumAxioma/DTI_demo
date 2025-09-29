@@ -1,4 +1,4 @@
-#include "DTIFiberLib.h"
+#include "../header/DTIRenderer.h"
 
 // VTK头文件
 #include <vtkSmartPointer.h>

@@ -12,10 +12,8 @@
 #include <QLabel>
 #include <QVTKOpenGLWidget.h>
 
-// 包含静态库头文件
+// 包含静态库头文件 - 统一入口
 #include "DTIFiberLib.h"
-#include "TrkFileReader.h"
-#include "FiberBundleRenderer.h"
 
 // VTK头文件
 #include <vtkRenderWindow.h>

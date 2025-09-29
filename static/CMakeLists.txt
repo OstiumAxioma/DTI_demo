@@ -93,6 +93,7 @@ set(SOURCES
 
 set(HEADERS
     header/DTIFiberLib.h
+    header/DTIRenderer.h
     header/TrkFileReader.h
     header/FiberBundleRenderer.h
 )

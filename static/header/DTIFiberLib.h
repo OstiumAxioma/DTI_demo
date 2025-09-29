@@ -1,46 +1,31 @@
 #ifndef DTIFIBERLIB_H
 #define DTIFIBERLIB_H
 
-#include <memory>
+/**
+ * DTI Fiber Visualization Library - Unified Header
+ * 
+ * This header provides a single entry point for all DTI fiber bundle
+ * visualization functionality. Simply include this file to access:
+ * - TRK file reading and parsing (TrkFileReader)
+ * - Fiber bundle rendering (FiberBundleRenderer) 
+ * - VTK rendering management (DTIFiberRenderer)
+ * 
+ * Version: 1.0.0
+ * Author: DTI Visualization Project
+ */
 
-// 前向声明VTK类，避免在头文件中包含VTK头文件
-class vtkRenderer;
-class vtkRenderWindow;
-class vtkRenderWindowInteractor;
+// Include all library modules
+#include "TrkFileReader.h"
+#include "FiberBundleRenderer.h"
+#include "DTIRenderer.h"
 
-namespace DTIFiberLib {
+// Library version information
+#define DTIFIBERLIB_VERSION_MAJOR 1
+#define DTIFIBERLIB_VERSION_MINOR 0
+#define DTIFIBERLIB_VERSION_PATCH 0
+#define DTIFIBERLIB_VERSION "1.0.0"
 
-    class DTIFiberRenderer {
-    public:
-        DTIFiberRenderer();
-        ~DTIFiberRenderer();
-
-        // 初始化渲染器
-        void InitializeRenderer();
-        
-        // 设置渲染窗口
-        void SetRenderWindow(vtkRenderWindow* window);
-        
-        // 获取渲染器
-        vtkRenderer* GetRenderer();
-        
-        // 清除所有Actor
-        void ClearActors();
-        
-        // 重置相机
-        void ResetCamera();
-        
-        // 渲染
-        void Render();
-        
-        // 设置背景颜色
-        void SetBackground(double r, double g, double b);
-
-    private:
-        class Impl;
-        std::unique_ptr<Impl> pImpl;
-    };
-
-} // namespace DTIFiberLib
+// Convenience namespace alias for shorter usage
+namespace DTI = DTIFiberLib;
 
 #endif // DTIFIBERLIB_H
