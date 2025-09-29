@@ -165,12 +165,24 @@ void MainWindow::openTrkFile()
                     .arg(trackCount);
                 statusBar()->showMessage(successMsg, 5000);
                 
-                QMessageBox::information(this, "读取和渲染成功", 
-                    QString("文件：%1\n总轨迹数量：%2\n已渲染：%3 条\n总点数：%4")
-                    .arg(QFileInfo(fileName).fileName())
-                    .arg(trackCount)
-                    .arg(fiberRenderer->GetRenderedTrackCount())
-                    .arg(fiberRenderer->GetTotalPointCount()));
+                // 导出JSON
+                QString jsonPath = "data/" + QFileInfo(fileName).baseName() + "_export.json";
+                if (trkReader->ExportToJSON(jsonPath.toStdString(), 10)) {
+                    QMessageBox::information(this, "读取和渲染成功", 
+                        QString("文件：%1\n总轨迹数量：%2\n已渲染：%3 条\n总点数：%4\n\nJSON已导出至：%5")
+                        .arg(QFileInfo(fileName).fileName())
+                        .arg(trackCount)
+                        .arg(fiberRenderer->GetRenderedTrackCount())
+                        .arg(fiberRenderer->GetTotalPointCount())
+                        .arg(jsonPath));
+                } else {
+                    QMessageBox::information(this, "读取和渲染成功", 
+                        QString("文件：%1\n总轨迹数量：%2\n已渲染：%3 条\n总点数：%4\n\nJSON导出失败")
+                        .arg(QFileInfo(fileName).fileName())
+                        .arg(trackCount)
+                        .arg(fiberRenderer->GetRenderedTrackCount())
+                        .arg(fiberRenderer->GetTotalPointCount()));
+                }
                     
             } else {
                 QString errorMsg = QString::fromStdString(trkReader->GetLastErrorMessage());

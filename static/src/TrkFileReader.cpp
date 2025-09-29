@@ -1,5 +1,6 @@
 #include "../header/TrkFileReader.h"
 #include <iostream>
+#include <fstream>
 #include <cstring>
 #include <algorithm>
 
@@ -158,6 +159,77 @@ namespace DTIFiberLib {
         std::cout << "Property count: " << m_tractographyHeader.n_properties << std::endl;
         std::cout << "Header size: " << m_tractographyHeader.hdr_size << std::endl;
         std::cout << "Actual loaded tracks: " << m_fiberTracks.size() << std::endl;
+    }
+
+    bool TrkFileReader::ExportToJSON(const std::string& outputPath, size_t maxTracks) const {
+        if (!m_isValidFile || m_fiberTracks.empty()) {
+            return false;
+        }
+
+        std::ofstream jsonFile(outputPath);
+        if (!jsonFile.is_open()) {
+            return false;
+        }
+
+        jsonFile << "{\n";
+        
+        // 输出头部信息
+        jsonFile << "  \"header\": {\n";
+        jsonFile << "    \"magic\": \"" << std::string(m_tractographyHeader.magic, 5) << "\",\n";
+        jsonFile << "    \"dimensions\": [" << m_tractographyHeader.dim[0] << ", " 
+                 << m_tractographyHeader.dim[1] << ", " << m_tractographyHeader.dim[2] << "],\n";
+        jsonFile << "    \"voxel_size\": [" << m_tractographyHeader.voxel_size[0] << ", " 
+                 << m_tractographyHeader.voxel_size[1] << ", " << m_tractographyHeader.voxel_size[2] << "],\n";
+        jsonFile << "    \"origin\": [" << m_tractographyHeader.origin[0] << ", " 
+                 << m_tractographyHeader.origin[1] << ", " << m_tractographyHeader.origin[2] << "],\n";
+        jsonFile << "    \"track_count\": " << m_tractographyHeader.n_count << ",\n";
+        jsonFile << "    \"version\": " << m_tractographyHeader.version << ",\n";
+        jsonFile << "    \"n_scalars\": " << m_tractographyHeader.n_scalars << ",\n";
+        jsonFile << "    \"n_properties\": " << m_tractographyHeader.n_properties << "\n";
+        jsonFile << "  },\n";
+
+        // 输出轨迹数据
+        size_t tracksToExport = std::min(maxTracks, m_fiberTracks.size());
+        jsonFile << "  \"tracks\": [\n";
+        
+        for (size_t trackIdx = 0; trackIdx < tracksToExport; ++trackIdx) {
+            const auto& track = m_fiberTracks[trackIdx];
+            jsonFile << "    {\n";
+            jsonFile << "      \"track_id\": " << trackIdx << ",\n";
+            jsonFile << "      \"point_count\": " << track.size() << ",\n";
+            jsonFile << "      \"points\": [\n";
+            
+            for (size_t pointIdx = 0; pointIdx < track.size(); ++pointIdx) {
+                const auto& point = track[pointIdx];
+                jsonFile << "        {\"x\": " << point.x << ", \"y\": " << point.y << ", \"z\": " << point.z;
+                
+                if (!point.scalars.empty()) {
+                    jsonFile << ", \"scalars\": [";
+                    for (size_t i = 0; i < point.scalars.size(); ++i) {
+                        if (i > 0) jsonFile << ", ";
+                        jsonFile << point.scalars[i];
+                    }
+                    jsonFile << "]";
+                }
+                
+                jsonFile << "}";
+                if (pointIdx < track.size() - 1) jsonFile << ",";
+                jsonFile << "\n";
+            }
+            
+            jsonFile << "      ]\n";
+            jsonFile << "    }";
+            if (trackIdx < tracksToExport - 1) jsonFile << ",";
+            jsonFile << "\n";
+        }
+        
+        jsonFile << "  ],\n";
+        jsonFile << "  \"exported_count\": " << tracksToExport << ",\n";
+        jsonFile << "  \"total_tracks\": " << m_fiberTracks.size() << "\n";
+        jsonFile << "}\n";
+
+        jsonFile.close();
+        return true;
     }
 
 } // namespace DTIFiberLib

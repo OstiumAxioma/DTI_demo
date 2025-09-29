@@ -56,6 +56,8 @@ namespace DTIFiberLib {
         
         void PrintHeaderInfo() const;
         const std::string& GetLastErrorMessage() const { return m_lastErrorMessage; }
+        
+        bool ExportToJSON(const std::string& outputPath, size_t maxTracks = 100) const;
 
     private:
         bool ParseTrkHeader();
