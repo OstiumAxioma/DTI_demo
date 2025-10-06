@@ -104,11 +104,13 @@ set(CMAKE_AUTOUIC_SEARCH_PATHS ${CMAKE_CURRENT_SOURCE_DIR})
 set(SOURCES
     src/main.cpp
     src/mainwindow.cpp
+    src/GLFiberWidget.cpp
 )
 
 # 头文件
 set(HEADERS
     header/mainwindow.h
+    src/GLFiberWidget.h
 )
 
 # UI文件
@@ -120,10 +122,11 @@ set(FORMS
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${FORMS})
 
 # 添加包含目录
-target_include_directories(${PROJECT_NAME} PRIVATE 
+target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/header
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/static/header  # 添加DTI静态库头文件目录
+    ${CMAKE_CURRENT_SOURCE_DIR}/static/header  # DTI静态库头文件
+    ${CMAKE_CURRENT_SOURCE_DIR}/static/include # GLAD头文件
 )
 
 # 设置编译定义
@@ -174,7 +177,16 @@ if(DTIFIBER_LIB_RELEASE OR DTIFIBER_LIB_DEBUG)
     target_link_libraries(${PROJECT_NAME} PRIVATE
         $<$<CONFIG:Debug>:${DTIFIBER_LIB_DEBUG}>
         $<$<CONFIG:Release>:${DTIFIBER_LIB_RELEASE}>
+        opengl32
     )
+
+    # 使用WHOLEARCHIVE强制链接整个静态库，包括GLAD
+    if(MSVC)
+        target_link_options(${PROJECT_NAME} PRIVATE
+            $<$<CONFIG:Debug>:/WHOLEARCHIVE:${DTIFIBER_LIB_DEBUG}>
+            $<$<CONFIG:Release>:/WHOLEARCHIVE:${DTIFIBER_LIB_RELEASE}>
+        )
+    endif()
 else()
     message(FATAL_ERROR "Static library DTIFiberLib not found!")
 endif()

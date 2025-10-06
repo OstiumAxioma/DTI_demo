@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(DTIFiberLib CXX)
+project(DTIFiberLib C CXX)
 
 # 加载本地配置文件（如果存在）
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config.local.cmake")
@@ -86,16 +86,17 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # 收集源文件
 set(SOURCES
-    src/DTIFiberLib.cpp
     src/TrkFileReader.cpp
-    src/FiberBundleRenderer.cpp
+    src/GLShaderProgram.cpp
+    src/GLFiberRenderer.cpp
+    src/glad.c
 )
 
 set(HEADERS
     header/DTIFiberLib.h
-    header/DTIRenderer.h
     header/TrkFileReader.h
-    header/FiberBundleRenderer.h
+    header/GLShaderProgram.h
+    header/GLFiberRenderer.h
 )
 
 # 创建静态库
@@ -104,11 +105,15 @@ add_library(DTIFiberLib STATIC ${SOURCES} ${HEADERS})
 # 设置包含目录
 target_include_directories(DTIFiberLib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/header
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${VTK_INCLUDE_DIRS}
 )
 
-# 链接VTK库
-target_link_libraries(DTIFiberLib PUBLIC ${VTK_LIBRARIES})
+# 链接库
+target_link_libraries(DTIFiberLib PUBLIC
+    ${VTK_LIBRARIES}
+    opengl32
+)
 
 # Windows特定设置
 if(WIN32)
@@ -140,7 +145,7 @@ if(WIN32)
 endif()
 
 # 显示配置信息
-message(STATUS "Building DTIFiberLib Static Library with VTK support")
-message(STATUS "VTK_VERSION: ${VTK_VERSION}")
+message(STATUS "Building DTIFiberLib Static Library with OpenGL support")
+message(STATUS "VTK_VERSION: ${VTK_VERSION} (for file I/O only)")
 message(STATUS "VTK_USE_FILE: ${VTK_USE_FILE}")
 message(STATUS "Output directory: ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")

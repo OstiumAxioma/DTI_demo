@@ -1,4 +1,8 @@
+// MUST include GLAD first, before any Qt OpenGL headers
+#include <glad/glad.h>
+
 #include "mainwindow.h"
+#include "GLFiberWidget.h"
 #include <QApplication>
 #include <QMenuBar>
 #include <QStatusBar>
@@ -7,38 +11,28 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QVBoxLayout>
-#include <QHBoxLayout>
 #include <QTimer>
 #include <QLabel>
-#include <QVTKOpenGLWidget.h>
 
-// 包含静态库头文件 - 统一入口
+// Include static library header - unified entry
 #include "DTIFiberLib.h"
-
-// VTK头文件
-#include <vtkRenderWindow.h>
-#include <vtkRenderer.h>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
-    , vtkWidget(nullptr)
-    , dtiRenderer(std::make_unique<DTIFiberLib::DTIFiberRenderer>())
+    , glWidget(nullptr)
     , trkReader(std::make_unique<DTIFiberLib::TrkFileReader>())
-    , fiberRenderer(std::make_unique<DTIFiberLib::FiberBundleRenderer>())
+    , glFiberRenderer(std::make_unique<DTIFiberLib::GLFiberRenderer>())
 {
-    setWindowTitle("DTI Fiber Viewer");
+    setWindowTitle("DTI Fiber Viewer - OpenGL");
     resize(800, 600);
 
     createActions();
     createMenus();
     createToolBars();
     createStatusBar();
-    
-    // 先创建一个简单的界面，确保程序能稳定运行
-    setupSimpleWidget();
-    
-    // 延迟初始化VTK组件
-    QTimer::singleShot(2000, this, &MainWindow::setupVTKWidget);
+
+    // Initialize OpenGL widget
+    setupOpenGLWidget();
 }
 
 MainWindow::~MainWindow()
@@ -53,12 +47,12 @@ void MainWindow::createActions()
     exitAct->setStatusTip("退出应用程序");
     connect(exitAct, &QAction::triggered, this, &QWidget::close);
 
-    // 关于动作
+    // About action
     aboutAct = new QAction("关于(&A)", this);
     aboutAct->setStatusTip("显示应用程序的关于对话框");
     connect(aboutAct, &QAction::triggered, [this]() {
         QMessageBox::about(this, "关于 DTI Fiber Viewer",
-                          "这是一个基于VTK和Qt的DTI神经纤维束可视化项目。\n用于加载和显示.trk文件。");
+                          "这是一个基于OpenGL和Qt的DTI神经纤维束可视化项目。\n用于加载和显示.trk文件。");
     });
 
     // 打开TRK文件动作
@@ -91,36 +85,22 @@ void MainWindow::createStatusBar()
     statusBar()->showMessage("就绪");
 }
 
-void MainWindow::setupSimpleWidget()
-{
-    QLabel *label = new QLabel("DTI Fiber Viewer 正在初始化...", this);
-    label->setAlignment(Qt::AlignCenter);
-    label->setStyleSheet("QLabel { font-size: 18px; color: blue; }");
-    setCentralWidget(label);
-    statusBar()->showMessage("简单界面创建成功", 2000);
-}
-
-void MainWindow::setupVTKWidget()
+void MainWindow::setupOpenGLWidget()
 {
     try {
-        statusBar()->showMessage("正在初始化VTK...", 1000);
+        statusBar()->showMessage("正在初始化OpenGL...", 1000);
 
-        // 步骤1：创建QVTKOpenGLWidget
-        vtkWidget = new QVTKOpenGLWidget(this);
-        setCentralWidget(vtkWidget);
+        // Create OpenGL widget
+        glWidget = new GLFiberWidget(this);
+        setCentralWidget(glWidget);
 
-        // 步骤2：初始化静态库中的DTI渲染器
-        dtiRenderer->InitializeRenderer();
-        dtiRenderer->SetBackground(0.1, 0.2, 0.4); // 深蓝色背景
+        // Set the fiber renderer
+        glWidget->setFiberRenderer(glFiberRenderer.get());
 
-        // 步骤3：将渲染器与QVTKOpenGLWidget连接
-        vtkRenderWindow* renderWindow = vtkWidget->GetRenderWindow();
-        dtiRenderer->SetRenderWindow(renderWindow);
-
-        statusBar()->showMessage("VTK集成到Qt界面成功！", 2000);
+        statusBar()->showMessage("OpenGL集成到Qt界面成功！", 2000);
     } catch (const std::exception& e) {
-        QMessageBox::warning(this, "警告", QString("VTK初始化失败: %1").arg(e.what()));
-        statusBar()->showMessage("VTK初始化失败", 3000);
+        QMessageBox::warning(this, "警告", QString("OpenGL初始化失败: %1").arg(e.what()));
+        statusBar()->showMessage("OpenGL初始化失败", 3000);
     }
 }
 
@@ -129,62 +109,55 @@ void MainWindow::openTrkFile()
 {
     try {
         QString fileName = QFileDialog::getOpenFileName(
-            this, 
-            "打开TRK文件", 
-            "data", 
+            this,
+            "打开TRK文件",
+            "data",
             "TRK Files (*.trk);;All Files (*)"
         );
-        
+
         if (!fileName.isEmpty()) {
             statusBar()->showMessage("正在读取TRK文件...", 1000);
-            
+
             if (trkReader->LoadTractographyFile(fileName.toStdString())) {
                 trkReader->PrintHeaderInfo();
-                
+
                 size_t trackCount = trkReader->GetTrackCount();
-                
-                // 渲染纤维束
+
+                // Render fiber bundles with OpenGL
                 statusBar()->showMessage("正在渲染纤维束...", 1000);
-                
+
                 const auto& tracks = trkReader->GetAllTracks();
-                fiberRenderer->SetTrackSubset(tracks, 1000);  // 限制显示1000条轨迹以提高性能
-                fiberRenderer->SetColoringMode(DTIFiberLib::FiberColoringMode::DIRECTION_RGB);
-                fiberRenderer->SetLineWidth(1.0f);
-                fiberRenderer->RenderFiberBundle();
-                
-                // 添加到VTK渲染器
-                dtiRenderer->ClearActors();  // 清除之前的对象
-                dtiRenderer->GetRenderer()->AddActor(fiberRenderer->GetActor());
-                dtiRenderer->ResetCamera();
-                dtiRenderer->Render();
-                
-                QString successMsg = QString("成功渲染 %1 条纤维束（共 %2 条）")
-                    .arg(fiberRenderer->GetRenderedTrackCount())
+                glFiberRenderer->setTracks(tracks);
+                glFiberRenderer->setColorMode(DTIFiberLib::FiberColoringMode::DIRECTION_RGB);
+                glFiberRenderer->setLineWidth(2.0f);
+
+                // Update OpenGL widget
+                glWidget->update();
+
+                QString successMsg = QString("成功加载 %1 条纤维束")
                     .arg(trackCount);
                 statusBar()->showMessage(successMsg, 5000);
-                
-                // 导出JSON
+
+                // Export JSON (optional)
                 QString jsonPath = "data/" + QFileInfo(fileName).baseName() + "_export.json";
                 if (trkReader->ExportToJSON(jsonPath.toStdString(), 10)) {
-                    QMessageBox::information(this, "读取和渲染成功", 
-                        QString("文件：%1\n总轨迹数量：%2\n已渲染：%3 条\n总点数：%4\n\nJSON已导出至：%5")
+                    QMessageBox::information(this, "加载成功",
+                        QString("文件：%1\n轨迹数量：%2\n总点数：%3\n\nJSON已导出至：%4")
                         .arg(QFileInfo(fileName).fileName())
                         .arg(trackCount)
-                        .arg(fiberRenderer->GetRenderedTrackCount())
-                        .arg(fiberRenderer->GetTotalPointCount())
+                        .arg(glFiberRenderer->getTotalPointCount())
                         .arg(jsonPath));
                 } else {
-                    QMessageBox::information(this, "读取和渲染成功", 
-                        QString("文件：%1\n总轨迹数量：%2\n已渲染：%3 条\n总点数：%4\n\nJSON导出失败")
+                    QMessageBox::information(this, "加载成功",
+                        QString("文件：%1\n轨迹数量：%2\n总点数：%3")
                         .arg(QFileInfo(fileName).fileName())
                         .arg(trackCount)
-                        .arg(fiberRenderer->GetRenderedTrackCount())
-                        .arg(fiberRenderer->GetTotalPointCount()));
+                        .arg(glFiberRenderer->getTotalPointCount()));
                 }
-                    
+
             } else {
                 QString errorMsg = QString::fromStdString(trkReader->GetLastErrorMessage());
-                QMessageBox::warning(this, "读取失败", 
+                QMessageBox::warning(this, "读取失败",
                     QString("无法读取TRK文件：\n%1\n\n错误信息：%2")
                     .arg(fileName)
                     .arg(errorMsg));
@@ -192,7 +165,7 @@ void MainWindow::openTrkFile()
             }
         }
     } catch (const std::exception& e) {
-        QMessageBox::critical(this, "错误", 
+        QMessageBox::critical(this, "错误",
             QString("读取TRK文件时发生异常：%1").arg(e.what()));
         statusBar()->showMessage("读取TRK文件异常", 3000);
     }

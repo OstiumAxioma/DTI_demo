@@ -1,11 +1,6 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-// VTK模块初始化 - 解决 "no override found for 'vtkRenderer'" 错误
-#include <vtkAutoInit.h>
-VTK_MODULE_INIT(vtkRenderingOpenGL2)
-VTK_MODULE_INIT(vtkInteractionStyle)
-
 #include <QMainWindow>
 #include <memory>
 
@@ -17,13 +12,12 @@ class QStatusBar;
 class QToolBar;
 QT_END_NAMESPACE
 
-class QVTKOpenGLWidget;
+class GLFiberWidget;
 
-// 前向声明
+// Forward declarations
 namespace DTIFiberLib {
-    class DTIFiberRenderer;
     class TrkFileReader;
-    class FiberBundleRenderer;
+    class GLFiberRenderer;
 }
 
 class MainWindow : public QMainWindow
@@ -39,13 +33,12 @@ private slots:
     void createMenus();
     void createToolBars();
     void createStatusBar();
-    void setupSimpleWidget();
-    void setupVTKWidget();
+    void setupOpenGLWidget();
     void openTrkFile();
 
 private:
-    // UI组件
-    QVTKOpenGLWidget *vtkWidget;
+    // UI components
+    GLFiberWidget *glWidget;
     QMenu *fileMenu;
     QMenu *helpMenu;
     QToolBar *fileToolBar;
@@ -53,10 +46,9 @@ private:
     QAction *aboutAct;
     QAction *openTrkAct;
 
-    // 使用静态库的DTI纤维渲染器和TRK文件读取器
-    std::unique_ptr<DTIFiberLib::DTIFiberRenderer> dtiRenderer;
+    // DTI library components
     std::unique_ptr<DTIFiberLib::TrkFileReader> trkReader;
-    std::unique_ptr<DTIFiberLib::FiberBundleRenderer> fiberRenderer;
+    std::unique_ptr<DTIFiberLib::GLFiberRenderer> glFiberRenderer;
 };
 
 #endif // MAINWINDOW_H
