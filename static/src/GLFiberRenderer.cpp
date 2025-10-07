@@ -48,6 +48,7 @@ GLFiberRenderer::GLFiberRenderer()
     , m_opacity(1.0f)
     , m_renderedTrackCount(0)
     , m_totalPointCount(0)
+    , m_minX(0), m_maxX(0), m_minY(0), m_maxY(0), m_minZ(0), m_maxZ(0)
     , m_lodEnabled(false)
     , m_maxPointsPerTrack(0)
     , m_initialized(false)
@@ -113,6 +114,10 @@ void GLFiberRenderer::setTracks(const std::vector<FiberTrack>& tracks)
 {
     m_tracks = tracks;
     m_needsUpload = true;
+
+    // Build vertex data immediately to calculate bounding box
+    // (GPU upload will happen later in render())
+    buildVertexData();
 }
 
 void GLFiberRenderer::setColorMode(FiberColoringMode mode)
@@ -143,12 +148,17 @@ void GLFiberRenderer::setMaxPointsPerTrack(size_t maxPoints)
 void GLFiberRenderer::buildVertexData()
 {
     m_vertexData.clear();
+    m_trackStarts.clear();
+    m_trackCounts.clear();
     m_totalPointCount = 0;
     m_renderedTrackCount = 0;
 
     for (const auto& track : m_tracks) {
         if (track.empty()) continue;
 
+        // Record track start and count for multi-draw
+        m_trackStarts.push_back(static_cast<GLint>(m_totalPointCount));
+        m_trackCounts.push_back(static_cast<GLsizei>(track.size()));
         m_renderedTrackCount++;
 
         // Build vertex data with direction calculation
@@ -195,23 +205,23 @@ void GLFiberRenderer::buildVertexData()
         }
     }
 
-    // Calculate bounding box for debugging
-    float minX = 1e10, minY = 1e10, minZ = 1e10;
-    float maxX = -1e10, maxY = -1e10, maxZ = -1e10;
+    // Calculate bounding box
+    m_minX = 1e10; m_minY = 1e10; m_minZ = 1e10;
+    m_maxX = -1e10; m_maxY = -1e10; m_maxZ = -1e10;
     for (size_t i = 0; i < m_vertexData.size(); i += 6) {
         float x = m_vertexData[i];
         float y = m_vertexData[i + 1];
         float z = m_vertexData[i + 2];
-        minX = std::min(minX, x); maxX = std::max(maxX, x);
-        minY = std::min(minY, y); maxY = std::max(maxY, y);
-        minZ = std::min(minZ, z); maxZ = std::max(maxZ, z);
+        m_minX = std::min(m_minX, x); m_maxX = std::max(m_maxX, x);
+        m_minY = std::min(m_minY, y); m_maxY = std::max(m_maxY, y);
+        m_minZ = std::min(m_minZ, z); m_maxZ = std::max(m_maxZ, z);
     }
 
     std::cout << "Built vertex data: " << m_renderedTrackCount << " tracks, "
               << m_totalPointCount << " points" << std::endl;
-    std::cout << "Bounding box: X[" << minX << ", " << maxX << "] "
-              << "Y[" << minY << ", " << maxY << "] "
-              << "Z[" << minZ << ", " << maxZ << "]" << std::endl;
+    std::cout << "Bounding box: X[" << m_minX << ", " << m_maxX << "] "
+              << "Y[" << m_minY << ", " << m_maxY << "] "
+              << "Z[" << m_minZ << ", " << m_maxZ << "]" << std::endl;
 }
 
 void GLFiberRenderer::uploadToGPU()
@@ -226,8 +236,10 @@ void GLFiberRenderer::uploadToGPU()
         return;
     }
 
-    // Build vertex data
-    buildVertexData();
+    // Build vertex data if not already built
+    if (m_vertexData.empty()) {
+        buildVertexData();
+    }
 
     if (m_vertexData.empty()) {
         std::cout << "No vertex data to upload" << std::endl;
@@ -266,6 +278,15 @@ void GLFiberRenderer::render(const float* mvpMatrix)
     // Use shader program
     m_shader->use();
 
+    // Debug: Print MVP matrix first time
+    static bool firstRender = true;
+    if (firstRender) {
+        std::cout << "MVP Matrix (first 4 values): "
+                  << mvpMatrix[0] << ", " << mvpMatrix[1] << ", "
+                  << mvpMatrix[2] << ", " << mvpMatrix[3] << std::endl;
+        firstRender = false;
+    }
+
     // Set uniforms
     m_shader->setUniformMatrix4fv("uMVPMatrix", mvpMatrix);
     m_shader->setUniform1i("uColorMode", m_colorMode == FiberColoringMode::DIRECTION_RGB ? 1 : 0);
@@ -281,17 +302,33 @@ void GLFiberRenderer::render(const float* mvpMatrix)
     // Bind VAO and render
     glBindVertexArray(m_VAO);
 
-    // Render each track as a line strip
-    size_t vertexOffset = 0;
-    for (const auto& track : m_tracks) {
-        if (track.empty()) continue;
+    // Render all tracks in one call using glMultiDrawArrays
+    if (!m_trackStarts.empty() && !m_trackCounts.empty()) {
+        std::cout << "Rendering " << m_trackStarts.size() << " tracks with glMultiDrawArrays" << std::endl;
+        glMultiDrawArrays(GL_LINE_STRIP, m_trackStarts.data(), m_trackCounts.data(), static_cast<GLsizei>(m_trackStarts.size()));
 
-        glDrawArrays(GL_LINE_STRIP, static_cast<GLint>(vertexOffset), static_cast<GLsizei>(track.size()));
-        vertexOffset += track.size();
+        // Check for OpenGL errors
+        GLenum err = glGetError();
+        if (err != GL_NO_ERROR) {
+            std::cerr << "OpenGL error after glMultiDrawArrays: 0x" << std::hex << err << std::dec << std::endl;
+        }
+    } else {
+        std::cerr << "WARNING: No track data to render (starts=" << m_trackStarts.size()
+                  << ", counts=" << m_trackCounts.size() << ")" << std::endl;
     }
 
     glBindVertexArray(0);
     glDisable(GL_BLEND);
+}
+
+void GLFiberRenderer::getBoundingBox(float& minX, float& maxX, float& minY, float& maxY, float& minZ, float& maxZ) const
+{
+    minX = m_minX;
+    maxX = m_maxX;
+    minY = m_minY;
+    maxY = m_maxY;
+    minZ = m_minZ;
+    maxZ = m_maxZ;
 }
 
 } // namespace DTIFiberLib

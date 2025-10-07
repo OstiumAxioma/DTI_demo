@@ -9,6 +9,9 @@ GLFiberWidget::GLFiberWidget(QWidget* parent)
     , m_cameraDistance(200.0f)
     , m_rotationX(0.0f)
     , m_rotationY(0.0f)
+    , m_centerX(0.0f)
+    , m_centerY(0.0f)
+    , m_centerZ(0.0f)
 {
     setFocusPolicy(Qt::StrongFocus);
 }
@@ -20,6 +23,29 @@ GLFiberWidget::~GLFiberWidget()
 void GLFiberWidget::setFiberRenderer(DTIFiberLib::GLFiberRenderer* renderer)
 {
     m_fiberRenderer = renderer;
+}
+
+void GLFiberWidget::setBoundingBox(float minX, float maxX, float minY, float maxY, float minZ, float maxZ)
+{
+    // Calculate center
+    m_centerX = (minX + maxX) * 0.5f;
+    m_centerY = (minY + maxY) * 0.5f;
+    m_centerZ = (minZ + maxZ) * 0.5f;
+
+    // Calculate bounding box size
+    float sizeX = maxX - minX;
+    float sizeY = maxY - minY;
+    float sizeZ = maxZ - minZ;
+    float maxSize = std::max({sizeX, sizeY, sizeZ});
+
+    // Adjust camera distance based on data size
+    m_cameraDistance = maxSize * 1.5f;
+
+    std::cout << "Data center: (" << m_centerX << ", " << m_centerY << ", " << m_centerZ << ")" << std::endl;
+    std::cout << "Camera distance: " << m_cameraDistance << std::endl;
+
+    updateMVPMatrix();
+    update();
 }
 
 void GLFiberWidget::initializeGL()
@@ -75,8 +101,8 @@ void GLFiberWidget::updateMVPMatrix()
     m_modelMatrix.setToIdentity();
     m_modelMatrix.rotate(m_rotationX, 1.0f, 0.0f, 0.0f);
     m_modelMatrix.rotate(m_rotationY, 0.0f, 1.0f, 0.0f);
-    // Center the data at origin (based on typical DTI data range)
-    m_modelMatrix.translate(-123.0f, -90.0f, -62.0f);
+    // Center the data at origin
+    m_modelMatrix.translate(-m_centerX, -m_centerY, -m_centerZ);
 
     // MVP = Projection * View * Model
     m_mvpMatrix = m_projectionMatrix * m_viewMatrix * m_modelMatrix;

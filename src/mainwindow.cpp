@@ -13,6 +13,10 @@
 #include <QVBoxLayout>
 #include <QTimer>
 #include <QLabel>
+#include <QDir>
+#include <random>
+#include <algorithm>
+#include <iostream>
 
 // Include static library header - unified entry
 #include "DTIFiberLib.h"
@@ -126,10 +130,44 @@ void MainWindow::openTrkFile()
                 // Render fiber bundles with OpenGL
                 statusBar()->showMessage("正在渲染纤维束...", 1000);
 
-                const auto& tracks = trkReader->GetAllTracks();
-                glFiberRenderer->setTracks(tracks);
+                const auto& allTracks = trkReader->GetAllTracks();
+
+                // Auto-downsample if too many tracks (>500K)
+                std::vector<DTIFiberLib::FiberTrack> tracksToRender;
+                size_t maxTracks = 500000;  // 50万条限制
+                if (allTracks.size() > maxTracks) {
+                    // Random sampling using reservoir sampling (efficient for large datasets)
+                    tracksToRender.reserve(maxTracks);
+                    std::random_device rd;
+                    std::mt19937 gen(rd());
+
+                    // Reservoir sampling algorithm
+                    for (size_t i = 0; i < allTracks.size(); ++i) {
+                        if (i < maxTracks) {
+                            tracksToRender.push_back(allTracks[i]);
+                        } else {
+                            std::uniform_int_distribution<size_t> dist(0, i);
+                            size_t j = dist(gen);
+                            if (j < maxTracks) {
+                                tracksToRender[j] = allTracks[i];
+                            }
+                        }
+                    }
+
+                    std::cout << "Downsampled " << allTracks.size() << " tracks to "
+                              << tracksToRender.size() << " (reservoir sampling)" << std::endl;
+                } else {
+                    tracksToRender = allTracks;
+                }
+
+                glFiberRenderer->setTracks(tracksToRender);  // This now builds vertex data and calculates bounding box
                 glFiberRenderer->setColorMode(DTIFiberLib::FiberColoringMode::DIRECTION_RGB);
                 glFiberRenderer->setLineWidth(2.0f);
+
+                // Set bounding box for automatic camera positioning
+                float minX, maxX, minY, maxY, minZ, maxZ;
+                glFiberRenderer->getBoundingBox(minX, maxX, minY, maxY, minZ, maxZ);
+                glWidget->setBoundingBox(minX, maxX, minY, maxY, minZ, maxZ);
 
                 // Update OpenGL widget
                 glWidget->update();
@@ -139,17 +177,23 @@ void MainWindow::openTrkFile()
                 statusBar()->showMessage(successMsg, 5000);
 
                 // Export JSON (optional)
+                QDir dataDir("data");
+                if (!dataDir.exists()) {
+                    dataDir.mkpath(".");
+                }
                 QString jsonPath = "data/" + QFileInfo(fileName).baseName() + "_export.json";
-                if (trkReader->ExportToJSON(jsonPath.toStdString(), 10)) {
+                bool jsonExported = trkReader->ExportToJSON(jsonPath.toStdString(), 10);
+
+                if (jsonExported) {
                     QMessageBox::information(this, "加载成功",
                         QString("文件：%1\n轨迹数量：%2\n总点数：%3\n\nJSON已导出至：%4")
                         .arg(QFileInfo(fileName).fileName())
                         .arg(trackCount)
                         .arg(glFiberRenderer->getTotalPointCount())
-                        .arg(jsonPath));
+                        .arg(QFileInfo(jsonPath).absoluteFilePath()));
                 } else {
                     QMessageBox::information(this, "加载成功",
-                        QString("文件：%1\n轨迹数量：%2\n总点数：%3")
+                        QString("文件：%1\n轨迹数量：%2\n总点数：%3\n\n(JSON导出失败)")
                         .arg(QFileInfo(fileName).fileName())
                         .arg(trackCount)
                         .arg(glFiberRenderer->getTotalPointCount()));

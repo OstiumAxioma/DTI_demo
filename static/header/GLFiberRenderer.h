@@ -44,6 +44,9 @@ public:
     size_t getRenderedTrackCount() const { return m_renderedTrackCount; }
     size_t getTotalPointCount() const { return m_totalPointCount; }
 
+    // Bounding box
+    void getBoundingBox(float& minX, float& maxX, float& minY, float& maxY, float& minZ, float& maxZ) const;
+
     bool isInitialized() const { return m_initialized; }
 
 private:
@@ -59,6 +62,8 @@ private:
     // Data
     std::vector<FiberTrack> m_tracks;
     std::vector<float> m_vertexData;  // Interleaved: pos.x, pos.y, pos.z, dir.x, dir.y, dir.z
+    std::vector<GLint> m_trackStarts;  // Start index of each track
+    std::vector<GLsizei> m_trackCounts;  // Point count of each track
 
     // Rendering state
     FiberColoringMode m_colorMode;
@@ -68,6 +73,9 @@ private:
     // Statistics
     size_t m_renderedTrackCount;
     size_t m_totalPointCount;
+
+    // Bounding box
+    float m_minX, m_maxX, m_minY, m_maxY, m_minZ, m_maxZ;
 
     // Performance options
     bool m_lodEnabled;

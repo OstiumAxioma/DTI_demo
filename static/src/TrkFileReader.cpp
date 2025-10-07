@@ -88,16 +88,32 @@ namespace DTIFiberLib {
         m_file.seekg(1000, std::ios::beg);
         m_fiberTracks.clear();
 
+        size_t trackIndex = 0;
         while (!m_file.eof()) {
             uint32_t n_points;
             m_file.read(reinterpret_cast<char*>(&n_points), sizeof(uint32_t));
 
-            if (m_file.eof() || n_points == 0 || n_points > 10000) {
+            if (m_file.eof()) {
                 break;
             }
 
+            // Debug: Print first few tracks
+            if (trackIndex < 5) {
+                std::cout << "Track " << trackIndex << ": n_points = " << n_points << std::endl;
+            }
+
+            if (n_points == 0 || n_points > 10000) {
+                std::cerr << "WARNING: Track " << trackIndex << " has invalid point count: " << n_points << std::endl;
+                break;
+            }
+
+            trackIndex++;
+
             FiberTrack track;
             track.reserve(n_points);
+
+            // Debug: Record file position before reading points
+            std::streampos posBefore = m_file.tellg();
 
             for (uint32_t i = 0; i < n_points; ++i) {
                 TrackPoint point;
@@ -108,18 +124,25 @@ namespace DTIFiberLib {
 
                 if (m_tractographyHeader.n_scalars > 0) {
                     point.scalars.resize(m_tractographyHeader.n_scalars);
-                    m_file.read(reinterpret_cast<char*>(point.scalars.data()), 
+                    m_file.read(reinterpret_cast<char*>(point.scalars.data()),
                                sizeof(float) * m_tractographyHeader.n_scalars);
                 }
 
                 track.push_back(point);
             }
 
-            m_fiberTracks.push_back(track);
-
             if (m_tractographyHeader.n_properties > 0) {
                 m_file.seekg(sizeof(float) * m_tractographyHeader.n_properties, std::ios::cur);
             }
+
+            // Debug: Print actual bytes read for first track
+            if (trackIndex == 1) {
+                std::streampos posAfter = m_file.tellg();
+                std::cout << "Track 0: Expected bytes = " << (4 + n_points * 12)
+                          << ", Actual bytes read = " << (posAfter - posBefore) << std::endl;
+            }
+
+            m_fiberTracks.push_back(track);
         }
 
         return true;

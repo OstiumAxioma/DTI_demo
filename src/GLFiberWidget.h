@@ -25,6 +25,7 @@ public:
     ~GLFiberWidget();
 
     void setFiberRenderer(DTIFiberLib::GLFiberRenderer* renderer);
+    void setBoundingBox(float minX, float maxX, float minY, float maxY, float minZ, float maxZ);
 
 protected:
     // Qt OpenGL interface
@@ -47,6 +48,9 @@ private:
     float m_rotationX;
     float m_rotationY;
     QPoint m_lastMousePos;
+
+    // Data bounding box center
+    float m_centerX, m_centerY, m_centerZ;
 
     // Matrices
     QMatrix4x4 m_projectionMatrix;
