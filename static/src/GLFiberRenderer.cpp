@@ -108,6 +108,13 @@ public:
             if (m_gridMinZ[i] == highest) m_gridMinZ[i] = m_boxMinZ;
         }
 
+        smoothGrid(m_gridMaxX);
+        smoothGrid(m_gridMinX);
+        smoothGrid(m_gridMaxY);
+        smoothGrid(m_gridMinY);
+        smoothGrid(m_gridMaxZ);
+        smoothGrid(m_gridMinZ);
+
         m_valid = true;
     }
 
@@ -127,12 +134,12 @@ public:
         const size_t idxXZ = static_cast<size_t>(xIdx) + static_cast<size_t>(zIdx) * SHADING_GRID;
         const size_t idxXY = static_cast<size_t>(xIdx) + static_cast<size_t>(yIdx) * SHADING_GRID;
 
-        const float distX = distanceWithinBounds(x, m_gridMinX[idxYZ], m_gridMaxX[idxYZ]);
-        const float distY = distanceWithinBounds(y, m_gridMinY[idxXZ], m_gridMaxY[idxXZ]);
-        const float distZ = distanceWithinBounds(z, m_gridMinZ[idxXY], m_gridMaxZ[idxXY]);
+        const float distX = axisDistance(m_gridMinX[idxYZ], m_gridMaxX[idxYZ], x);
+        const float distY = axisDistance(m_gridMinY[idxXZ], m_gridMaxY[idxXZ], y);
+        const float distZ = axisDistance(m_gridMinZ[idxXY], m_gridMaxZ[idxXY], z);
 
-        const float distance = std::min(distX + distY + distZ, SHADE_DISTANCE_CAP);
-        const float attenuation = std::min(distance * SHADING_STRENGTH, 0.95f);
+        const float shadeValue = 1.0f + distX + distY + distZ;
+        const float attenuation = std::min(shadeValue * m_strength, 0.95f);
         return std::clamp(1.0f - attenuation + 0.05f, 0.05f, 1.0f);
     }
 
@@ -145,11 +152,40 @@ private:
         return idx;
     }
 
-    static float distanceWithinBounds(float pos, float minVal, float maxVal)
+    static float axisDistance(float minVal, float maxVal, float pos)
     {
         const float positive = std::max(0.0f, maxVal - pos);
         const float negative = std::max(0.0f, pos - minVal);
         return std::min(std::min(positive, negative), SHADE_DISTANCE_CAP);
+    }
+
+    void smoothGrid(std::vector<float>& grid)
+    {
+        std::vector<float> temp(grid.size());
+        for (int iteration = 0; iteration < 3; ++iteration) {
+            for (int y = 0; y < SHADING_GRID; ++y) {
+                for (int x = 0; x < SHADING_GRID; ++x) {
+                    float sum = 0.0f;
+                    int count = 0;
+                    for (int dy = -1; dy <= 1; ++dy) {
+                        const int ny = y + dy;
+                        if (ny < 0 || ny >= SHADING_GRID) {
+                            continue;
+                        }
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            const int nx = x + dx;
+                            if (nx < 0 || nx >= SHADING_GRID) {
+                                continue;
+                            }
+                            sum += grid[ny * SHADING_GRID + nx];
+                            ++count;
+                        }
+                    }
+                    temp[y * SHADING_GRID + x] = count > 0 ? sum / static_cast<float>(count) : grid[y * SHADING_GRID + x];
+                }
+            }
+            grid.swap(temp);
+        }
     }
 
     bool m_valid = false;
@@ -168,6 +204,7 @@ private:
     std::vector<float> m_gridMinY;
     std::vector<float> m_gridMaxZ;
     std::vector<float> m_gridMinZ;
+    float m_strength = 0.05f;
 };
 
 } // namespace
