@@ -12,6 +12,8 @@ class QMenu;
 class QMenuBar;
 class QStatusBar;
 class QToolBar;
+class QSlider;
+class QLabel;
 QT_END_NAMESPACE
 
 class GLFiberWidget;
@@ -39,6 +41,8 @@ private slots:
     void setupOpenGLWidget();
     void openTrkFile();
     void toggleShading(bool checked);
+    void onLightingSliderChanged(int value);
+    void onShadowSliderChanged(int value);
 
 private:
     // UI components
@@ -50,6 +54,8 @@ private:
     QAction *aboutAct;
     QAction *openTrkAct;
     QAction *toggleShadingAct;
+    QSlider *lightingSlider;
+    QSlider *shadowSlider;
 
     // DTI library components
     std::vector<std::unique_ptr<DTIFiberLib::TrkFileReader>> trkReaders;

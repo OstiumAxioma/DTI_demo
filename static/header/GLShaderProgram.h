@@ -26,6 +26,7 @@ public:
     void setUniform1i(const char* name, int value);
     void setUniform1f(const char* name, float value);
     void setUniform3f(const char* name, float v0, float v1, float v2);
+    void setUniform3fv(const char* name, int count, const float* value);
 
     // Get program ID
     GLuint getProgramID() const { return m_programID; }

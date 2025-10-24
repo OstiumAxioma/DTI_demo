@@ -34,6 +34,9 @@ public:
     void setOpacity(float opacity);
     void setShadingEnabled(bool enable);
     bool isShadingEnabled() const { return m_enableShading; }
+    void setLightingStrength(float strengthFactor);
+    void setShadowStrength(float strength);
+    void setLightingEnabled(bool enable);
 
     // Rendering control
     void initialize();  // Must be called after OpenGL context is created
@@ -72,6 +75,7 @@ private:
                              const std::function<float(float, float, float)>& shadeFn);
     void setupChunkAttributes(ChunkBuffer& chunk) const;
     void updateBoundingBox(const GLFiberData::BoundingBox& box);
+    void updateLighting();
 
     // OpenGL resources
     std::unique_ptr<GLShaderProgram> m_shader;
@@ -86,6 +90,12 @@ private:
     float m_lineWidth;
     float m_opacity;
     bool m_enableShading;
+    bool m_enableLighting;
+
+    float m_lightAmbient;
+    float m_lightIntensity;
+    float m_lightingStrengthScale;
+    float m_lightPositions[2][3];
 
     // Statistics
     size_t m_renderedTrackCount;
@@ -93,6 +103,7 @@ private:
 
     // Bounding box
     float m_minX, m_maxX, m_minY, m_maxY, m_minZ, m_maxZ;
+    float m_shadowStrength;
 
     // Performance options
     bool m_lodEnabled;

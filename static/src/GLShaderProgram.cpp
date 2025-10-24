@@ -87,6 +87,14 @@ void GLShaderProgram::setUniform3f(const char* name, float v0, float v1, float v
     }
 }
 
+void GLShaderProgram::setUniform3fv(const char* name, int count, const float* value)
+{
+    GLint location = glGetUniformLocation(m_programID, name);
+    if (location != -1) {
+        glUniform3fv(location, count, value);
+    }
+}
+
 GLuint GLShaderProgram::compileShader(const char* source, GLenum shaderType)
 {
     GLuint shader = glCreateShader(shaderType);
