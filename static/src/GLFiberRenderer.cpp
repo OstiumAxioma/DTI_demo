@@ -67,35 +67,24 @@ uniform int uColorMode;
 uniform float uOpacity;
 uniform int uEnableShading;
 uniform vec3 uLightDir;
-uniform float uAmbientIntensity;
 
 void main() {
-    vec3 dirAbs = abs(vDirection);
-
-    vec3 baseColor;
-    if (uColorMode == 1) {
-        baseColor = normalize(dirAbs + vec3(1e-5));
-    } else {
-        baseColor = vec3(1.0, 0.0, 0.0);
-    }
+    vec3 baseColor = (uColorMode == 1)
+        ? normalize(abs(vDirection) + vec3(1e-5))
+        : vec3(1.0, 0.0, 0.0);
 
     if (uEnableShading == 1) {
         vec3 L = normalize(uLightDir);
-        vec3 N = normalize(vDirection);
-        if (!all(isfinite(N)) || length(vDirection) < 1e-5) {
-            N = vec3(0.0, 0.0, 1.0);
+        if (length(L) < 1e-5) {
+            L = vec3(0.0, 0.0, 1.0);
         }
 
-        float lambert = max(dot(N, L), 0.0);
-        float diffuse = mix(uAmbientIntensity, 1.0, lambert);
+        float lenDir = length(vDirection);
+        vec3 dirNorm = (lenDir > 1e-5) ? vDirection / lenDir : vec3(0.0, 0.0, 1.0);
 
-        vec3 viewDir = vec3(0.0, 0.0, 1.0);
-        float rim = pow(clamp(1.0 - max(dot(abs(N), viewDir), 0.0), 0.0, 1.0), 2.0);
-
-        vec3 litColor = baseColor * diffuse;
-        litColor = mix(litColor, vec3(1.0), 0.25 * rim);
-
-        baseColor = clamp(litColor, 0.0, 1.0);
+        float alignment = abs(dot(dirNorm, L));
+        float brightness = mix(0.25, 1.0, alignment);
+        baseColor = clamp(baseColor * brightness, 0.0, 1.0);
     }
 
     FragmentColor = vec4(baseColor, uOpacity);
@@ -373,7 +362,6 @@ void GLFiberRenderer::render(const float* mvpMatrix)
     m_shader->setUniform1f("uOpacity", m_opacity);
     m_shader->setUniform1i("uEnableShading", m_enableShading ? 1 : 0);
     m_shader->setUniform3f("uLightDir", LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2]);
-    m_shader->setUniform1f("uAmbientIntensity", 0.45f);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
