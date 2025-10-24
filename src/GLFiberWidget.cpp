@@ -61,7 +61,7 @@ void GLFiberWidget::initializeGL()
 
     // OpenGL settings
     glEnable(GL_DEPTH_TEST);
-    glClearColor(0.1f, 0.2f, 0.4f, 1.0f);
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
 
     // Initialize fiber renderer
     if (m_fiberRenderer) {

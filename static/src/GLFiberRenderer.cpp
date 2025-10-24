@@ -1,8 +1,46 @@
 #include "../header/GLFiberRenderer.h"
-#include <iostream>
+#include <algorithm>
 #include <cmath>
+#include <iostream>
+#include <limits>
 
 namespace DTIFiberLib {
+
+namespace {
+constexpr size_t MAX_CHUNK_BYTES = 32ull * 1024ull * 1024ull; // 32 MB
+constexpr float LIGHT_DIR[3] = {0.3f, 0.6f, 0.7f};
+
+inline void computeDirection(const FiberTrack& track, size_t index, float& dirX, float& dirY, float& dirZ)
+{
+    dirX = dirY = dirZ = 0.0f;
+    if (track.size() == 1) {
+        dirX = dirY = dirZ = 0.5f;
+        return;
+    }
+
+    if (index == 0) {
+        dirX = track[1].x - track[0].x;
+        dirY = track[1].y - track[0].y;
+        dirZ = track[1].z - track[0].z;
+    } else if (index == track.size() - 1) {
+        dirX = track[index].x - track[index - 1].x;
+        dirY = track[index].y - track[index - 1].y;
+        dirZ = track[index].z - track[index - 1].z;
+    } else {
+        dirX = track[index + 1].x - track[index - 1].x;
+        dirY = track[index + 1].y - track[index - 1].y;
+        dirZ = track[index + 1].z - track[index - 1].z;
+    }
+
+    const float length = std::sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
+    if (length > 0.0001f) {
+        dirX /= length;
+        dirY /= length;
+        dirZ /= length;
+    }
+}
+
+} // namespace
 
 // Embedded shaders
 static const char* vertexShaderSource = R"(
@@ -10,49 +48,80 @@ static const char* vertexShaderSource = R"(
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aDirection;
 
-out vec3 FragColor;
+out vec3 vDirection;
 
 uniform mat4 uMVPMatrix;
-uniform int uColorMode;
 
 void main() {
     gl_Position = uMVPMatrix * vec4(aPosition, 1.0);
-
-    if (uColorMode == 1) {
-        // Direction-based RGB coloring
-        FragColor = abs(normalize(aDirection));
-    } else {
-        // Default solid color (red)
-        FragColor = vec3(1.0, 0.0, 0.0);
-    }
+    vDirection = aDirection;
 }
 )";
 
 static const char* fragmentShaderSource = R"(
 #version 460 core
-in vec3 FragColor;
+in vec3 vDirection;
 out vec4 FragmentColor;
 
+uniform int uColorMode;
 uniform float uOpacity;
+uniform int uEnableShading;
+uniform vec3 uLightDir;
+uniform float uAmbientIntensity;
 
 void main() {
-    FragmentColor = vec4(FragColor, uOpacity);
+    vec3 dirAbs = abs(vDirection);
+
+    vec3 baseColor;
+    if (uColorMode == 1) {
+        baseColor = normalize(dirAbs + vec3(1e-5));
+    } else {
+        baseColor = vec3(1.0, 0.0, 0.0);
+    }
+
+    if (uEnableShading == 1) {
+        vec3 L = normalize(uLightDir);
+        vec3 N = normalize(vDirection);
+        if (!all(isfinite(N)) || length(vDirection) < 1e-5) {
+            N = vec3(0.0, 0.0, 1.0);
+        }
+
+        float lambert = max(dot(N, L), 0.0);
+        float diffuse = mix(uAmbientIntensity, 1.0, lambert);
+
+        vec3 viewDir = vec3(0.0, 0.0, 1.0);
+        float rim = pow(clamp(1.0 - max(dot(abs(N), viewDir), 0.0), 0.0, 1.0), 2.0);
+
+        vec3 litColor = baseColor * diffuse;
+        litColor = mix(litColor, vec3(1.0), 0.25 * rim);
+
+        baseColor = clamp(litColor, 0.0, 1.0);
+    }
+
+    FragmentColor = vec4(baseColor, uOpacity);
 }
 )";
 
 GLFiberRenderer::GLFiberRenderer()
-    : m_VAO(0)
-    , m_VBO(0)
+    : m_shader(nullptr)
+    , m_chunks()
+    , m_data(nullptr)
+    , m_dirty(true)
     , m_colorMode(FiberColoringMode::DIRECTION_RGB)
     , m_lineWidth(1.0f)
     , m_opacity(1.0f)
+    , m_enableShading(false)
     , m_renderedTrackCount(0)
     , m_totalPointCount(0)
-    , m_minX(0), m_maxX(0), m_minY(0), m_maxY(0), m_minZ(0), m_maxZ(0)
+    , m_minX(0.0f)
+    , m_maxX(0.0f)
+    , m_minY(0.0f)
+    , m_maxY(0.0f)
+    , m_minZ(0.0f)
+    , m_maxZ(0.0f)
     , m_lodEnabled(false)
     , m_maxPointsPerTrack(0)
     , m_initialized(false)
-    , m_needsUpload(false)
 {
 }
 
@@ -67,57 +136,31 @@ void GLFiberRenderer::initialize()
         return;
     }
 
-    // Create and compile shader program
     m_shader = std::make_unique<GLShaderProgram>();
     if (!m_shader->loadFromString(vertexShaderSource, fragmentShaderSource)) {
         std::cerr << "Failed to create shader program" << std::endl;
+        m_shader.reset();
         return;
     }
 
-    // Generate VAO and VBO
-    glGenVertexArrays(1, &m_VAO);
-    glGenBuffers(1, &m_VBO);
-
-    // Setup VAO
-    glBindVertexArray(m_VAO);
-    glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
-
-    // Position attribute (location = 0)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-
-    // Direction attribute (location = 1)
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-
-    glBindVertexArray(0);
-
     m_initialized = true;
-    std::cout << "GLFiberRenderer initialized successfully" << std::endl;
+    if (m_dirty) {
+        rebuildBuffers();
+    }
 }
 
 void GLFiberRenderer::cleanup()
 {
-    if (m_VAO != 0) {
-        glDeleteVertexArrays(1, &m_VAO);
-        m_VAO = 0;
-    }
-    if (m_VBO != 0) {
-        glDeleteBuffers(1, &m_VBO);
-        m_VBO = 0;
-    }
+    releaseChunks();
     m_shader.reset();
     m_initialized = false;
 }
 
-void GLFiberRenderer::setTracks(const std::vector<FiberTrack>& tracks)
+void GLFiberRenderer::setData(const GLFiberData& data)
 {
-    m_tracks = tracks;
-    m_needsUpload = true;
-
-    // Build vertex data immediately to calculate bounding box
-    // (GPU upload will happen later in render())
-    buildVertexData();
+    m_data = &data;
+    updateBoundingBox(data.computeBoundingBox());
+    m_dirty = true;
 }
 
 void GLFiberRenderer::setColorMode(FiberColoringMode mode)
@@ -127,194 +170,234 @@ void GLFiberRenderer::setColorMode(FiberColoringMode mode)
 
 void GLFiberRenderer::setLineWidth(float width)
 {
-    m_lineWidth = width;
+    m_lineWidth = std::max(1.0f, width);
 }
 
 void GLFiberRenderer::setOpacity(float opacity)
 {
-    m_opacity = opacity;
+    m_opacity = std::clamp(opacity, 0.0f, 1.0f);
+}
+
+void GLFiberRenderer::setShadingEnabled(bool enable)
+{
+    m_enableShading = enable;
 }
 
 void GLFiberRenderer::setLODEnabled(bool enable)
 {
     m_lodEnabled = enable;
+    m_dirty = true;
 }
 
 void GLFiberRenderer::setMaxPointsPerTrack(size_t maxPoints)
 {
     m_maxPointsPerTrack = maxPoints;
+    m_dirty = true;
 }
 
-void GLFiberRenderer::buildVertexData()
+void GLFiberRenderer::rebuildBuffers()
 {
-    m_vertexData.clear();
-    m_trackStarts.clear();
-    m_trackCounts.clear();
-    m_totalPointCount = 0;
+    if (!m_initialized) {
+        m_dirty = true;
+        return;
+    }
+
+    releaseChunks();
     m_renderedTrackCount = 0;
+    m_totalPointCount = 0;
 
-    for (const auto& track : m_tracks) {
-        if (track.empty()) continue;
+    if (!m_data || m_data->empty()) {
+        m_dirty = false;
+        return;
+    }
 
-        // Record track start and count for multi-draw
-        m_trackStarts.push_back(static_cast<GLint>(m_totalPointCount));
-        m_trackCounts.push_back(static_cast<GLsizei>(track.size()));
+    const auto& tracks = m_data->getTracks();
+
+    buildChunksForStyle(GLFiberData::TractStyle::Line, tracks);
+    buildChunksForStyle(GLFiberData::TractStyle::Point, tracks);
+    buildChunksForStyle(GLFiberData::TractStyle::Tube, tracks);
+
+    m_dirty = false;
+}
+
+void GLFiberRenderer::releaseChunks()
+{
+    for (auto& chunk : m_chunks) {
+        if (chunk.vbo != 0) {
+            glDeleteBuffers(1, &chunk.vbo);
+        }
+        if (chunk.vao != 0) {
+            glDeleteVertexArrays(1, &chunk.vao);
+        }
+    }
+    m_chunks.clear();
+}
+
+void GLFiberRenderer::setupChunkAttributes(ChunkBuffer& chunk) const
+{
+    glBindVertexArray(chunk.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, chunk.vbo);
+
+    const GLsizei strideBytes = chunk.stride * static_cast<GLsizei>(sizeof(float));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, strideBytes, reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, strideBytes, reinterpret_cast<void*>(3 * sizeof(float)));
+
+    glBindVertexArray(0);
+}
+
+void GLFiberRenderer::buildChunksForStyle(GLFiberData::TractStyle style,
+                                          const std::vector<GLFiberData::TrackEntry>& tracks)
+{
+    std::vector<float> vertexBuffer;
+    vertexBuffer.reserve(1024 * 6);
+
+    auto chunkFactory = [style]() {
+        ChunkBuffer chunk;
+        chunk.style = style;
+        chunk.primitive = (style == GLFiberData::TractStyle::Point) ? GL_POINTS : GL_LINE_STRIP;
+        chunk.stride = 6;
+        return chunk;
+    };
+
+    ChunkBuffer chunk = chunkFactory();
+
+    const size_t maxPointsLimit = (m_lodEnabled && m_maxPointsPerTrack > 0)
+                                      ? m_maxPointsPerTrack
+                                      : std::numeric_limits<size_t>::max();
+
+    for (const auto& entry : tracks) {
+        if (entry.style != style) {
+            continue;
+        }
+
+        const auto& track = entry.track;
+        if (track.empty()) {
+            continue;
+        }
+
+        const size_t pointBudget = std::min(track.size(), maxPointsLimit);
+        const size_t startIndex = vertexBuffer.size() / chunk.stride;
+        size_t emittedPoints = 0;
+
+        for (size_t i = 0; i < pointBudget; ++i) {
+            float dirX = 0.0f;
+            float dirY = 0.0f;
+            float dirZ = 0.0f;
+            computeDirection(track, i, dirX, dirY, dirZ);
+
+            vertexBuffer.push_back(track[i].x);
+            vertexBuffer.push_back(track[i].y);
+            vertexBuffer.push_back(track[i].z);
+            vertexBuffer.push_back(dirX);
+            vertexBuffer.push_back(dirY);
+            vertexBuffer.push_back(dirZ);
+            ++emittedPoints;
+        }
+
+        if (emittedPoints == 0) {
+            continue;
+        }
+
+        chunk.starts.push_back(static_cast<GLint>(startIndex));
+        chunk.counts.push_back(static_cast<GLsizei>(emittedPoints));
+        chunk.vertexCount += emittedPoints;
+
         m_renderedTrackCount++;
+        m_totalPointCount += emittedPoints;
 
-        // Build vertex data with direction calculation
-        for (size_t i = 0; i < track.size(); ++i) {
-            const auto& point = track[i];
-
-            // Calculate direction vector
-            float dirX = 0.0f, dirY = 0.0f, dirZ = 0.0f;
-
-            if (track.size() == 1) {
-                dirX = dirY = dirZ = 0.5f;
-            } else if (i == 0) {
-                dirX = track[1].x - track[0].x;
-                dirY = track[1].y - track[0].y;
-                dirZ = track[1].z - track[0].z;
-            } else if (i == track.size() - 1) {
-                dirX = track[i].x - track[i-1].x;
-                dirY = track[i].y - track[i-1].y;
-                dirZ = track[i].z - track[i-1].z;
-            } else {
-                // Central difference
-                dirX = track[i+1].x - track[i-1].x;
-                dirY = track[i+1].y - track[i-1].y;
-                dirZ = track[i+1].z - track[i-1].z;
+        const size_t currentBytes = vertexBuffer.size() * sizeof(float);
+        if (currentBytes >= MAX_CHUNK_BYTES) {
+            if (!chunk.starts.empty()) {
+                glGenVertexArrays(1, &chunk.vao);
+                glGenBuffers(1, &chunk.vbo);
+                glBindVertexArray(chunk.vao);
+                glBindBuffer(GL_ARRAY_BUFFER, chunk.vbo);
+                glBufferData(GL_ARRAY_BUFFER,
+                             static_cast<GLsizeiptr>(vertexBuffer.size() * sizeof(float)),
+                             vertexBuffer.data(),
+                             GL_STATIC_DRAW);
+                setupChunkAttributes(chunk);
+                glBindVertexArray(0);
+                m_chunks.push_back(chunk);
             }
 
-            // Normalize direction
-            float length = std::sqrt(dirX*dirX + dirY*dirY + dirZ*dirZ);
-            if (length > 0.0001f) {
-                dirX /= length;
-                dirY /= length;
-                dirZ /= length;
-            }
-
-            // Add vertex data (position + direction)
-            m_vertexData.push_back(point.x);
-            m_vertexData.push_back(point.y);
-            m_vertexData.push_back(point.z);
-            m_vertexData.push_back(dirX);
-            m_vertexData.push_back(dirY);
-            m_vertexData.push_back(dirZ);
-
-            m_totalPointCount++;
+            vertexBuffer.clear();
+            chunk = chunkFactory();
         }
     }
 
-    // Calculate bounding box
-    m_minX = 1e10; m_minY = 1e10; m_minZ = 1e10;
-    m_maxX = -1e10; m_maxY = -1e10; m_maxZ = -1e10;
-    for (size_t i = 0; i < m_vertexData.size(); i += 6) {
-        float x = m_vertexData[i];
-        float y = m_vertexData[i + 1];
-        float z = m_vertexData[i + 2];
-        m_minX = std::min(m_minX, x); m_maxX = std::max(m_maxX, x);
-        m_minY = std::min(m_minY, y); m_maxY = std::max(m_maxY, y);
-        m_minZ = std::min(m_minZ, z); m_maxZ = std::max(m_maxZ, z);
+    if (!vertexBuffer.empty() && !chunk.starts.empty()) {
+        glGenVertexArrays(1, &chunk.vao);
+        glGenBuffers(1, &chunk.vbo);
+        glBindVertexArray(chunk.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, chunk.vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(vertexBuffer.size() * sizeof(float)),
+                     vertexBuffer.data(),
+                     GL_STATIC_DRAW);
+        setupChunkAttributes(chunk);
+        glBindVertexArray(0);
+        m_chunks.push_back(chunk);
     }
-
-    std::cout << "Built vertex data: " << m_renderedTrackCount << " tracks, "
-              << m_totalPointCount << " points" << std::endl;
-    std::cout << "Bounding box: X[" << m_minX << ", " << m_maxX << "] "
-              << "Y[" << m_minY << ", " << m_maxY << "] "
-              << "Z[" << m_minZ << ", " << m_maxZ << "]" << std::endl;
 }
 
-void GLFiberRenderer::uploadToGPU()
+void GLFiberRenderer::updateBoundingBox(const GLFiberData::BoundingBox& box)
 {
-    if (!m_initialized) {
-        std::cerr << "GLFiberRenderer not initialized" << std::endl;
-        return;
-    }
-
-    if (m_tracks.empty()) {
-        std::cout << "No tracks to upload" << std::endl;
-        return;
-    }
-
-    // Build vertex data if not already built
-    if (m_vertexData.empty()) {
-        buildVertexData();
-    }
-
-    if (m_vertexData.empty()) {
-        std::cout << "No vertex data to upload" << std::endl;
-        return;
-    }
-
-    // Upload to GPU
-    glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
-    glBufferData(GL_ARRAY_BUFFER,
-                 m_vertexData.size() * sizeof(float),
-                 m_vertexData.data(),
-                 GL_STATIC_DRAW);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-    m_needsUpload = false;
-
-    std::cout << "Uploaded " << m_vertexData.size() * sizeof(float) / 1024 / 1024
-              << " MB to GPU" << std::endl;
+    m_minX = box.minX;
+    m_maxX = box.maxX;
+    m_minY = box.minY;
+    m_maxY = box.maxY;
+    m_minZ = box.minZ;
+    m_maxZ = box.maxZ;
 }
 
 void GLFiberRenderer::render(const float* mvpMatrix)
 {
-    if (!m_initialized) {
-        std::cerr << "GLFiberRenderer not initialized" << std::endl;
+    if (!m_initialized || !m_shader || !m_shader->isValid()) {
         return;
     }
 
-    if (m_needsUpload) {
-        uploadToGPU();
+    if (m_dirty) {
+        rebuildBuffers();
     }
 
-    if (m_vertexData.empty()) {
+    if (m_chunks.empty()) {
         return;
     }
 
-    // Use shader program
     m_shader->use();
-
-    // Debug: Print MVP matrix first time
-    static bool firstRender = true;
-    if (firstRender) {
-        std::cout << "MVP Matrix (first 4 values): "
-                  << mvpMatrix[0] << ", " << mvpMatrix[1] << ", "
-                  << mvpMatrix[2] << ", " << mvpMatrix[3] << std::endl;
-        firstRender = false;
-    }
-
-    // Set uniforms
     m_shader->setUniformMatrix4fv("uMVPMatrix", mvpMatrix);
     m_shader->setUniform1i("uColorMode", m_colorMode == FiberColoringMode::DIRECTION_RGB ? 1 : 0);
     m_shader->setUniform1f("uOpacity", m_opacity);
+    m_shader->setUniform1i("uEnableShading", m_enableShading ? 1 : 0);
+    m_shader->setUniform3f("uLightDir", LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2]);
+    m_shader->setUniform1f("uAmbientIntensity", 0.45f);
 
-    // Set line width
-    glLineWidth(m_lineWidth);
-
-    // Enable blending for transparency
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    // Bind VAO and render
-    glBindVertexArray(m_VAO);
-
-    // Render all tracks in one call using glMultiDrawArrays
-    if (!m_trackStarts.empty() && !m_trackCounts.empty()) {
-        std::cout << "Rendering " << m_trackStarts.size() << " tracks with glMultiDrawArrays" << std::endl;
-        glMultiDrawArrays(GL_LINE_STRIP, m_trackStarts.data(), m_trackCounts.data(), static_cast<GLsizei>(m_trackStarts.size()));
-
-        // Check for OpenGL errors
-        GLenum err = glGetError();
-        if (err != GL_NO_ERROR) {
-            std::cerr << "OpenGL error after glMultiDrawArrays: 0x" << std::hex << err << std::dec << std::endl;
+    for (const auto& chunk : m_chunks) {
+        if (chunk.starts.empty()) {
+            continue;
         }
-    } else {
-        std::cerr << "WARNING: No track data to render (starts=" << m_trackStarts.size()
-                  << ", counts=" << m_trackCounts.size() << ")" << std::endl;
+
+        glBindVertexArray(chunk.vao);
+
+        const float effectiveWidth =
+            (chunk.style == GLFiberData::TractStyle::Tube) ? std::max(3.0f * m_lineWidth, 2.0f) : m_lineWidth;
+
+        if (chunk.primitive == GL_POINTS) {
+            glPointSize(effectiveWidth);
+        } else {
+            glLineWidth(effectiveWidth);
+        }
+
+        glMultiDrawArrays(chunk.primitive,
+                          chunk.starts.data(),
+                          chunk.counts.data(),
+                          static_cast<GLsizei>(chunk.counts.size()));
     }
 
     glBindVertexArray(0);

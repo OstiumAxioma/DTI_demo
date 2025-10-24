@@ -88,11 +88,13 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(SOURCES
     src/TrkFileReader.cpp
     src/GLShaderProgram.cpp
+    src/GLFiberData.cpp
     src/GLFiberRenderer.cpp
     src/glad.c
 )
 
 set(HEADERS
+    header/GLFiberData.h
     header/DTIFiberLib.h
     header/TrkFileReader.h
     header/GLShaderProgram.h

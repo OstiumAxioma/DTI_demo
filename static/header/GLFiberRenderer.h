@@ -1,7 +1,7 @@
 #ifndef GLFIBERRENDERER_H
 #define GLFIBERRENDERER_H
 
-#include "TrkFileReader.h"
+#include "GLFiberData.h"
 #include "GLShaderProgram.h"
 #include <memory>
 #include <vector>
@@ -26,10 +26,12 @@ public:
     ~GLFiberRenderer();
 
     // Data interface
-    void setTracks(const std::vector<FiberTrack>& tracks);
+    void setData(const GLFiberData& data);
     void setColorMode(FiberColoringMode mode);
     void setLineWidth(float width);
     void setOpacity(float opacity);
+    void setShadingEnabled(bool enable);
+    bool isShadingEnabled() const { return m_enableShading; }
 
     // Rendering control
     void initialize();  // Must be called after OpenGL context is created
@@ -50,25 +52,37 @@ public:
     bool isInitialized() const { return m_initialized; }
 
 private:
-    void uploadToGPU();
-    void buildVertexData();
-    void calculateDirectionColors();
+    struct ChunkBuffer {
+        GLuint vao = 0;
+        GLuint vbo = 0;
+        GLenum primitive = GL_LINE_STRIP;
+        GLsizei stride = 0;
+        std::vector<GLint> starts;
+        std::vector<GLsizei> counts;
+        size_t vertexCount = 0;
+        GLFiberData::TractStyle style = GLFiberData::TractStyle::Line;
+    };
+
+    void rebuildBuffers();
+    void releaseChunks();
+    void buildChunksForStyle(GLFiberData::TractStyle style,
+                             const std::vector<GLFiberData::TrackEntry>& tracks);
+    void setupChunkAttributes(ChunkBuffer& chunk) const;
+    void updateBoundingBox(const GLFiberData::BoundingBox& box);
 
     // OpenGL resources
-    GLuint m_VAO;
-    GLuint m_VBO;
     std::unique_ptr<GLShaderProgram> m_shader;
+    std::vector<ChunkBuffer> m_chunks;
 
     // Data
-    std::vector<FiberTrack> m_tracks;
-    std::vector<float> m_vertexData;  // Interleaved: pos.x, pos.y, pos.z, dir.x, dir.y, dir.z
-    std::vector<GLint> m_trackStarts;  // Start index of each track
-    std::vector<GLsizei> m_trackCounts;  // Point count of each track
+    const GLFiberData* m_data;
+    bool m_dirty;
 
     // Rendering state
     FiberColoringMode m_colorMode;
     float m_lineWidth;
     float m_opacity;
+    bool m_enableShading;
 
     // Statistics
     size_t m_renderedTrackCount;
@@ -82,7 +96,6 @@ private:
     size_t m_maxPointsPerTrack;
 
     bool m_initialized;
-    bool m_needsUpload;
 };
 
 } // namespace DTIFiberLib

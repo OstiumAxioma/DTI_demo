@@ -14,6 +14,7 @@
 #include <QTimer>
 #include <QLabel>
 #include <QDir>
+#include <QStringList>
 #include <random>
 #include <algorithm>
 #include <iostream>
@@ -24,7 +25,7 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , glWidget(nullptr)
-    , trkReader(std::make_unique<DTIFiberLib::TrkFileReader>())
+    , glFiberData(std::make_unique<DTIFiberLib::GLFiberData>())
     , glFiberRenderer(std::make_unique<DTIFiberLib::GLFiberRenderer>())
 {
     setWindowTitle("DTI Fiber Viewer - OpenGL");
@@ -64,12 +65,74 @@ void MainWindow::createActions()
     openTrkAct->setShortcut(QKeySequence::Open);
     openTrkAct->setStatusTip("打开TrackVis .trk文件");
     connect(openTrkAct, &QAction::triggered, this, &MainWindow::openTrkFile);
+
+    toggleShadingAct = new QAction("启用阴影(&S)", this);
+    toggleShadingAct->setCheckable(true);
+    toggleShadingAct->setStatusTip("切换纤维束阴影效果");
+    connect(toggleShadingAct, &QAction::toggled, this, &MainWindow::toggleShading);
+}
+
+size_t MainWindow::appendTracksToRenderer(const QString& filePath,
+                                          DTIFiberLib::TrkFileReader& reader)
+{
+    const auto& allTracks = reader.GetAllTracks();
+    if (allTracks.empty()) {
+        return 0;
+    }
+
+    std::vector<DTIFiberLib::FiberTrack> tracksToAppend;
+    const size_t maxTracks = 500000;
+    if (allTracks.size() > maxTracks) {
+        tracksToAppend.reserve(maxTracks);
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        for (size_t i = 0; i < allTracks.size(); ++i) {
+            if (i < maxTracks) {
+                tracksToAppend.push_back(allTracks[i]);
+            } else {
+                std::uniform_int_distribution<size_t> dist(0, i);
+                size_t j = dist(gen);
+                if (j < maxTracks) {
+                    tracksToAppend[j] = allTracks[i];
+                }
+            }
+        }
+        std::cout << "Downsampled " << allTracks.size() << " tracks from "
+                  << QFileInfo(filePath).fileName().toStdString()
+                  << " to " << tracksToAppend.size() << " entries.\n";
+    } else {
+        tracksToAppend = allTracks;
+    }
+
+    const QString datasetName = QFileInfo(filePath).completeBaseName();
+    glFiberData->addDataset(datasetName.toStdString(),
+                            tracksToAppend,
+                            DTIFiberLib::GLFiberData::TractStyle::Line);
+
+    // Export a small JSON snapshot for diagnostics
+    QDir dataDir("data");
+    if (!dataDir.exists()) {
+        dataDir.mkpath(".");
+    }
+    const QString jsonPath = "data/" + datasetName + "_export.json";
+    reader.ExportToJSON(jsonPath.toStdString(), 10);
+
+    return tracksToAppend.size();
+}
+
+void MainWindow::toggleShading(bool checked)
+{
+    if (glFiberRenderer) {
+        glFiberRenderer->setShadingEnabled(checked);
+        glWidget->update();
+    }
 }
 
 void MainWindow::createMenus()
 {
     fileMenu = menuBar()->addMenu("文件(&F)");
     fileMenu->addAction(openTrkAct);
+    fileMenu->addAction(toggleShadingAct);
     fileMenu->addSeparator();
     fileMenu->addAction(exitAct);
 
@@ -81,6 +144,7 @@ void MainWindow::createToolBars()
 {
     fileToolBar = addToolBar("文件");
     fileToolBar->addAction(openTrkAct);
+    fileToolBar->addAction(toggleShadingAct);
     fileToolBar->addAction(exitAct);
 }
 
@@ -100,6 +164,7 @@ void MainWindow::setupOpenGLWidget()
 
         // Set the fiber renderer
         glWidget->setFiberRenderer(glFiberRenderer.get());
+        glFiberRenderer->setShadingEnabled(toggleShadingAct->isChecked());
 
         statusBar()->showMessage("OpenGL集成到Qt界面成功！", 2000);
     } catch (const std::exception& e) {
@@ -112,102 +177,84 @@ void MainWindow::setupOpenGLWidget()
 void MainWindow::openTrkFile()
 {
     try {
-        QString fileName = QFileDialog::getOpenFileName(
+        const QStringList fileNames = QFileDialog::getOpenFileNames(
             this,
-            "打开TRK文件",
+            "选择一个或多个TRK文件",
             "data",
             "TRK Files (*.trk);;All Files (*)"
         );
 
-        if (!fileName.isEmpty()) {
-            statusBar()->showMessage("正在读取TRK文件...", 1000);
+        if (fileNames.isEmpty()) {
+            return;
+        }
 
-            if (trkReader->LoadTractographyFile(fileName.toStdString())) {
-                trkReader->PrintHeaderInfo();
+        size_t newlyLoadedTracks = 0;
+        size_t newlyLoadedFiles = 0;
+        QStringList skippedDuplicates;
 
-                size_t trackCount = trkReader->GetTrackCount();
+        for (const QString& fileName : fileNames) {
+            if (fileName.isEmpty()) {
+                continue;
+            }
 
-                // Render fiber bundles with OpenGL
-                statusBar()->showMessage("正在渲染纤维束...", 1000);
+            QFileInfo fileInfo(fileName);
+            const QString datasetName = fileInfo.completeBaseName();
+            if (loadedDatasetNames.contains(datasetName)) {
+                skippedDuplicates << datasetName;
+                continue;
+            }
 
-                const auto& allTracks = trkReader->GetAllTracks();
+            statusBar()->showMessage(QString("正在读取 %1 ...").arg(fileInfo.fileName()), 1000);
 
-                // Auto-downsample if too many tracks (>500K)
-                std::vector<DTIFiberLib::FiberTrack> tracksToRender;
-                size_t maxTracks = 500000;  // 50万条限制
-                if (allTracks.size() > maxTracks) {
-                    // Random sampling using reservoir sampling (efficient for large datasets)
-                    tracksToRender.reserve(maxTracks);
-                    std::random_device rd;
-                    std::mt19937 gen(rd());
-
-                    // Reservoir sampling algorithm
-                    for (size_t i = 0; i < allTracks.size(); ++i) {
-                        if (i < maxTracks) {
-                            tracksToRender.push_back(allTracks[i]);
-                        } else {
-                            std::uniform_int_distribution<size_t> dist(0, i);
-                            size_t j = dist(gen);
-                            if (j < maxTracks) {
-                                tracksToRender[j] = allTracks[i];
-                            }
-                        }
-                    }
-
-                    std::cout << "Downsampled " << allTracks.size() << " tracks to "
-                              << tracksToRender.size() << " (reservoir sampling)" << std::endl;
-                } else {
-                    tracksToRender = allTracks;
-                }
-
-                glFiberRenderer->setTracks(tracksToRender);  // This now builds vertex data and calculates bounding box
-                glFiberRenderer->setColorMode(DTIFiberLib::FiberColoringMode::DIRECTION_RGB);
-                glFiberRenderer->setLineWidth(2.0f);
-
-                // Set bounding box for automatic camera positioning
-                float minX, maxX, minY, maxY, minZ, maxZ;
-                glFiberRenderer->getBoundingBox(minX, maxX, minY, maxY, minZ, maxZ);
-                glWidget->setBoundingBox(minX, maxX, minY, maxY, minZ, maxZ);
-
-                // Update OpenGL widget
-                glWidget->update();
-
-                QString successMsg = QString("成功加载 %1 条纤维束")
-                    .arg(trackCount);
-                statusBar()->showMessage(successMsg, 5000);
-
-                // Export JSON (optional)
-                QDir dataDir("data");
-                if (!dataDir.exists()) {
-                    dataDir.mkpath(".");
-                }
-                QString jsonPath = "data/" + QFileInfo(fileName).baseName() + "_export.json";
-                bool jsonExported = trkReader->ExportToJSON(jsonPath.toStdString(), 10);
-
-                if (jsonExported) {
-                    QMessageBox::information(this, "加载成功",
-                        QString("文件：%1\n轨迹数量：%2\n总点数：%3\n\nJSON已导出至：%4")
-                        .arg(QFileInfo(fileName).fileName())
-                        .arg(trackCount)
-                        .arg(glFiberRenderer->getTotalPointCount())
-                        .arg(QFileInfo(jsonPath).absoluteFilePath()));
-                } else {
-                    QMessageBox::information(this, "加载成功",
-                        QString("文件：%1\n轨迹数量：%2\n总点数：%3\n\n(JSON导出失败)")
-                        .arg(QFileInfo(fileName).fileName())
-                        .arg(trackCount)
-                        .arg(glFiberRenderer->getTotalPointCount()));
-                }
-
-            } else {
-                QString errorMsg = QString::fromStdString(trkReader->GetLastErrorMessage());
+            auto reader = std::make_unique<DTIFiberLib::TrkFileReader>();
+            if (!reader->LoadTractographyFile(fileName.toStdString())) {
                 QMessageBox::warning(this, "读取失败",
                     QString("无法读取TRK文件：\n%1\n\n错误信息：%2")
-                    .arg(fileName)
-                    .arg(errorMsg));
-                statusBar()->showMessage("TRK文件读取失败", 3000);
+                        .arg(fileName)
+                        .arg(QString::fromStdString(reader->GetLastErrorMessage())));
+                continue;
             }
+
+            reader->PrintHeaderInfo();
+            const size_t appended = appendTracksToRenderer(fileName, *reader);
+            if (appended == 0) {
+                continue;
+            }
+
+            loadedDatasetNames.append(datasetName);
+            newlyLoadedTracks += appended;
+            newlyLoadedFiles++;
+            trkReaders.push_back(std::move(reader));
         }
+
+        if (newlyLoadedFiles == 0) {
+            if (!skippedDuplicates.isEmpty()) {
+                statusBar()->showMessage(QString("跳过已加载数据集：%1").arg(skippedDuplicates.join(", ")), 5000);
+            } else {
+                statusBar()->showMessage("没有新的数据集被加载", 3000);
+            }
+            return;
+        }
+
+        glFiberRenderer->setData(*glFiberData);
+        glFiberRenderer->setColorMode(DTIFiberLib::FiberColoringMode::DIRECTION_RGB);
+        glFiberRenderer->setLineWidth(2.0f);
+        glFiberRenderer->setShadingEnabled(toggleShadingAct->isChecked());
+
+        float minX, maxX, minY, maxY, minZ, maxZ;
+        glFiberRenderer->getBoundingBox(minX, maxX, minY, maxY, minZ, maxZ);
+        glWidget->setBoundingBox(minX, maxX, minY, maxY, minZ, maxZ);
+        glWidget->update();
+
+        QString summary = QString("新增 %1 个数据集，新加载 %2 条轨迹，累计 %3 条轨迹")
+                              .arg(newlyLoadedFiles)
+                              .arg(static_cast<qulonglong>(newlyLoadedTracks))
+                              .arg(static_cast<qulonglong>(glFiberRenderer->getRenderedTrackCount()));
+        if (!skippedDuplicates.isEmpty()) {
+            summary += QString("；已忽略：%1").arg(skippedDuplicates.join(", "));
+        }
+        statusBar()->showMessage(summary, 6000);
+
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "错误",
             QString("读取TRK文件时发生异常：%1").arg(e.what()));

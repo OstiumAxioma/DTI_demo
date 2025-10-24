@@ -3,6 +3,8 @@
 
 #include <QMainWindow>
 #include <memory>
+#include <vector>
+#include <QStringList>
 
 QT_BEGIN_NAMESPACE
 class QAction;
@@ -18,6 +20,7 @@ class GLFiberWidget;
 namespace DTIFiberLib {
     class TrkFileReader;
     class GLFiberRenderer;
+    class GLFiberData;
 }
 
 class MainWindow : public QMainWindow
@@ -35,6 +38,7 @@ private slots:
     void createStatusBar();
     void setupOpenGLWidget();
     void openTrkFile();
+    void toggleShading(bool checked);
 
 private:
     // UI components
@@ -45,10 +49,16 @@ private:
     QAction *exitAct;
     QAction *aboutAct;
     QAction *openTrkAct;
+    QAction *toggleShadingAct;
 
     // DTI library components
-    std::unique_ptr<DTIFiberLib::TrkFileReader> trkReader;
+    std::vector<std::unique_ptr<DTIFiberLib::TrkFileReader>> trkReaders;
+    std::unique_ptr<DTIFiberLib::GLFiberData> glFiberData;
     std::unique_ptr<DTIFiberLib::GLFiberRenderer> glFiberRenderer;
+    QStringList loadedDatasetNames;
+
+    size_t appendTracksToRenderer(const QString& filePath,
+                                  DTIFiberLib::TrkFileReader& reader);
 };
 
 #endif // MAINWINDOW_H

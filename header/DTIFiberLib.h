@@ -16,6 +16,7 @@
 
 // Include all library modules
 #include "TrkFileReader.h"
+#include "GLFiberData.h"
 #include "GLFiberRenderer.h"
 #include "GLShaderProgram.h"
 
