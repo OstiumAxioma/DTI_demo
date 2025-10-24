@@ -5,10 +5,12 @@
 #include <limits>
 
 namespace DTIFiberLib {
-
 namespace {
+
 constexpr size_t MAX_CHUNK_BYTES = 32ull * 1024ull * 1024ull; // 32 MB
-constexpr float LIGHT_DIR[3] = {0.3f, 0.6f, 0.7f};
+constexpr int SHADING_GRID = 64;
+constexpr float SHADE_DISTANCE_CAP = 4.0f;
+constexpr float SHADING_STRENGTH = 0.08f;
 
 inline void computeDirection(const FiberTrack& track, size_t index, float& dirX, float& dirY, float& dirZ)
 {
@@ -40,33 +42,163 @@ inline void computeDirection(const FiberTrack& track, size_t index, float& dirX,
     }
 }
 
+class OcclusionVolume {
+public:
+    void build(const std::vector<GLFiberData::TrackEntry>& tracks,
+               const GLFiberData::BoundingBox& box)
+    {
+        m_valid = false;
+        m_boxMinX = box.minX;
+        m_boxMaxX = box.maxX;
+        m_boxMinY = box.minY;
+        m_boxMaxY = box.maxY;
+        m_boxMinZ = box.minZ;
+        m_boxMaxZ = box.maxZ;
+
+        const float rangeX = std::max(m_boxMaxX - m_boxMinX, 1e-4f);
+        const float rangeY = std::max(m_boxMaxY - m_boxMinY, 1e-4f);
+        const float rangeZ = std::max(m_boxMaxZ - m_boxMinZ, 1e-4f);
+
+        m_scaleX = (SHADING_GRID - 1) / rangeX;
+        m_scaleY = (SHADING_GRID - 1) / rangeY;
+        m_scaleZ = (SHADING_GRID - 1) / rangeZ;
+
+        const size_t planeSize = static_cast<size_t>(SHADING_GRID) * static_cast<size_t>(SHADING_GRID);
+        const float lowest = std::numeric_limits<float>::lowest();
+        const float highest = std::numeric_limits<float>::max();
+        m_gridMaxX.assign(planeSize, lowest);
+        m_gridMinX.assign(planeSize, highest);
+        m_gridMaxY.assign(planeSize, lowest);
+        m_gridMinY.assign(planeSize, highest);
+        m_gridMaxZ.assign(planeSize, lowest);
+        m_gridMinZ.assign(planeSize, highest);
+
+        bool anyPoint = false;
+
+        for (const auto& entry : tracks) {
+            for (const auto& point : entry.track) {
+                anyPoint = true;
+                const int xIdx = clampIndex((point.x - m_boxMinX) * m_scaleX);
+                const int yIdx = clampIndex((point.y - m_boxMinY) * m_scaleY);
+                const int zIdx = clampIndex((point.z - m_boxMinZ) * m_scaleZ);
+
+                const size_t idxYZ = static_cast<size_t>(yIdx) + static_cast<size_t>(zIdx) * SHADING_GRID;
+                const size_t idxXZ = static_cast<size_t>(xIdx) + static_cast<size_t>(zIdx) * SHADING_GRID;
+                const size_t idxXY = static_cast<size_t>(xIdx) + static_cast<size_t>(yIdx) * SHADING_GRID;
+
+                m_gridMaxX[idxYZ] = std::max(m_gridMaxX[idxYZ], point.x);
+                m_gridMinX[idxYZ] = std::min(m_gridMinX[idxYZ], point.x);
+                m_gridMaxY[idxXZ] = std::max(m_gridMaxY[idxXZ], point.y);
+                m_gridMinY[idxXZ] = std::min(m_gridMinY[idxXZ], point.y);
+                m_gridMaxZ[idxXY] = std::max(m_gridMaxZ[idxXY], point.z);
+                m_gridMinZ[idxXY] = std::min(m_gridMinZ[idxXY], point.z);
+            }
+        }
+
+        if (!anyPoint) {
+            return;
+        }
+
+        for (size_t i = 0; i < planeSize; ++i) {
+            if (m_gridMaxX[i] == lowest) m_gridMaxX[i] = m_boxMaxX;
+            if (m_gridMinX[i] == highest) m_gridMinX[i] = m_boxMinX;
+            if (m_gridMaxY[i] == lowest) m_gridMaxY[i] = m_boxMaxY;
+            if (m_gridMinY[i] == highest) m_gridMinY[i] = m_boxMinY;
+            if (m_gridMaxZ[i] == lowest) m_gridMaxZ[i] = m_boxMaxZ;
+            if (m_gridMinZ[i] == highest) m_gridMinZ[i] = m_boxMinZ;
+        }
+
+        m_valid = true;
+    }
+
+    bool valid() const { return m_valid; }
+
+    float occlusion(float x, float y, float z) const
+    {
+        if (!m_valid) {
+            return 1.0f;
+        }
+
+        const int xIdx = clampIndex((x - m_boxMinX) * m_scaleX);
+        const int yIdx = clampIndex((y - m_boxMinY) * m_scaleY);
+        const int zIdx = clampIndex((z - m_boxMinZ) * m_scaleZ);
+
+        const size_t idxYZ = static_cast<size_t>(yIdx) + static_cast<size_t>(zIdx) * SHADING_GRID;
+        const size_t idxXZ = static_cast<size_t>(xIdx) + static_cast<size_t>(zIdx) * SHADING_GRID;
+        const size_t idxXY = static_cast<size_t>(xIdx) + static_cast<size_t>(yIdx) * SHADING_GRID;
+
+        const float distX = distanceWithinBounds(x, m_gridMinX[idxYZ], m_gridMaxX[idxYZ]);
+        const float distY = distanceWithinBounds(y, m_gridMinY[idxXZ], m_gridMaxY[idxXZ]);
+        const float distZ = distanceWithinBounds(z, m_gridMinZ[idxXY], m_gridMaxZ[idxXY]);
+
+        const float distance = std::min(distX + distY + distZ, SHADE_DISTANCE_CAP);
+        const float attenuation = std::min(distance * SHADING_STRENGTH, 0.95f);
+        return std::clamp(1.0f - attenuation + 0.05f, 0.05f, 1.0f);
+    }
+
+private:
+    static int clampIndex(float value)
+    {
+        int idx = static_cast<int>(std::round(value));
+        if (idx < 0) idx = 0;
+        if (idx >= SHADING_GRID) idx = SHADING_GRID - 1;
+        return idx;
+    }
+
+    static float distanceWithinBounds(float pos, float minVal, float maxVal)
+    {
+        const float positive = std::max(0.0f, maxVal - pos);
+        const float negative = std::max(0.0f, pos - minVal);
+        return std::min(std::min(positive, negative), SHADE_DISTANCE_CAP);
+    }
+
+    bool m_valid = false;
+    float m_boxMinX = 0.0f;
+    float m_boxMaxX = 0.0f;
+    float m_boxMinY = 0.0f;
+    float m_boxMaxY = 0.0f;
+    float m_boxMinZ = 0.0f;
+    float m_boxMaxZ = 0.0f;
+    float m_scaleX = 1.0f;
+    float m_scaleY = 1.0f;
+    float m_scaleZ = 1.0f;
+    std::vector<float> m_gridMaxX;
+    std::vector<float> m_gridMinX;
+    std::vector<float> m_gridMaxY;
+    std::vector<float> m_gridMinY;
+    std::vector<float> m_gridMaxZ;
+    std::vector<float> m_gridMinZ;
+};
+
 } // namespace
 
-// Embedded shaders
 static const char* vertexShaderSource = R"(
 #version 460 core
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aDirection;
+layout(location = 2) in float aShade;
 
 out vec3 vDirection;
+out float vShade;
 
 uniform mat4 uMVPMatrix;
 
 void main() {
     gl_Position = uMVPMatrix * vec4(aPosition, 1.0);
     vDirection = aDirection;
+    vShade = aShade;
 }
 )";
 
 static const char* fragmentShaderSource = R"(
 #version 460 core
 in vec3 vDirection;
+in float vShade;
 out vec4 FragmentColor;
 
 uniform int uColorMode;
 uniform float uOpacity;
 uniform int uEnableShading;
-uniform vec3 uLightDir;
 
 void main() {
     vec3 baseColor = (uColorMode == 1)
@@ -74,17 +206,7 @@ void main() {
         : vec3(1.0, 0.0, 0.0);
 
     if (uEnableShading == 1) {
-        vec3 L = normalize(uLightDir);
-        if (length(L) < 1e-5) {
-            L = vec3(0.0, 0.0, 1.0);
-        }
-
-        float lenDir = length(vDirection);
-        vec3 dirNorm = (lenDir > 1e-5) ? vDirection / lenDir : vec3(0.0, 0.0, 1.0);
-
-        float alignment = abs(dot(dirNorm, L));
-        float brightness = mix(0.25, 1.0, alignment);
-        baseColor = clamp(baseColor * brightness, 0.0, 1.0);
+        baseColor *= vShade;
     }
 
     FragmentColor = vec4(baseColor, uOpacity);
@@ -202,9 +324,27 @@ void GLFiberRenderer::rebuildBuffers()
 
     const auto& tracks = m_data->getTracks();
 
-    buildChunksForStyle(GLFiberData::TractStyle::Line, tracks);
-    buildChunksForStyle(GLFiberData::TractStyle::Point, tracks);
-    buildChunksForStyle(GLFiberData::TractStyle::Tube, tracks);
+    GLFiberData::BoundingBox box{};
+    box.minX = m_minX;
+    box.maxX = m_maxX;
+    box.minY = m_minY;
+    box.maxY = m_maxY;
+    box.minZ = m_minZ;
+    box.maxZ = m_maxZ;
+
+    OcclusionVolume occlusion;
+    occlusion.build(tracks, box);
+
+    std::function<float(float, float, float)> shadeFn;
+    if (occlusion.valid()) {
+        shadeFn = [occlusion](float x, float y, float z) {
+            return occlusion.occlusion(x, y, z);
+        };
+    }
+
+    buildChunksForStyle(GLFiberData::TractStyle::Line, tracks, shadeFn);
+    buildChunksForStyle(GLFiberData::TractStyle::Point, tracks, shadeFn);
+    buildChunksForStyle(GLFiberData::TractStyle::Tube, tracks, shadeFn);
 
     m_dirty = false;
 }
@@ -232,21 +372,24 @@ void GLFiberRenderer::setupChunkAttributes(ChunkBuffer& chunk) const
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, strideBytes, reinterpret_cast<void*>(0));
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, strideBytes, reinterpret_cast<void*>(3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, strideBytes, reinterpret_cast<void*>(6 * sizeof(float)));
 
     glBindVertexArray(0);
 }
 
 void GLFiberRenderer::buildChunksForStyle(GLFiberData::TractStyle style,
-                                          const std::vector<GLFiberData::TrackEntry>& tracks)
+                                          const std::vector<GLFiberData::TrackEntry>& tracks,
+                                          const std::function<float(float, float, float)>& shadeFn)
 {
     std::vector<float> vertexBuffer;
-    vertexBuffer.reserve(1024 * 6);
+    vertexBuffer.reserve(1024 * 7);
 
     auto chunkFactory = [style]() {
         ChunkBuffer chunk;
         chunk.style = style;
         chunk.primitive = (style == GLFiberData::TractStyle::Point) ? GL_POINTS : GL_LINE_STRIP;
-        chunk.stride = 6;
+        chunk.stride = 7;
         return chunk;
     };
 
@@ -276,12 +419,15 @@ void GLFiberRenderer::buildChunksForStyle(GLFiberData::TractStyle style,
             float dirZ = 0.0f;
             computeDirection(track, i, dirX, dirY, dirZ);
 
+            float shadeFactor = shadeFn ? shadeFn(track[i].x, track[i].y, track[i].z) : 1.0f;
+
             vertexBuffer.push_back(track[i].x);
             vertexBuffer.push_back(track[i].y);
             vertexBuffer.push_back(track[i].z);
             vertexBuffer.push_back(dirX);
             vertexBuffer.push_back(dirY);
             vertexBuffer.push_back(dirZ);
+            vertexBuffer.push_back(shadeFactor);
             ++emittedPoints;
         }
 
@@ -361,7 +507,6 @@ void GLFiberRenderer::render(const float* mvpMatrix)
     m_shader->setUniform1i("uColorMode", m_colorMode == FiberColoringMode::DIRECTION_RGB ? 1 : 0);
     m_shader->setUniform1f("uOpacity", m_opacity);
     m_shader->setUniform1i("uEnableShading", m_enableShading ? 1 : 0);
-    m_shader->setUniform3f("uLightDir", LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2]);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
