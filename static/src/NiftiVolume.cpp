@@ -97,7 +97,26 @@ bool NiftiVolume::loadFromFile(const std::string& filePath)
         copiedMatrix = true;
     }
 
-    if (!copiedMatrix) {
+    if (copiedMatrix) {
+        for (int axis = 0; axis < 3; ++axis) {
+            double colNorm = std::sqrt(
+                transform->GetElement(0, axis) * transform->GetElement(0, axis) +
+                transform->GetElement(1, axis) * transform->GetElement(1, axis) +
+                transform->GetElement(2, axis) * transform->GetElement(2, axis));
+
+            const double desired = std::abs(m_spacing[axis]);
+            if (desired <= 1e-6) {
+                continue;
+            }
+
+            if (std::abs(colNorm - desired) > 1e-4) {
+                const double scale = desired / (colNorm > 1e-6 ? colNorm : 1.0);
+                for (int row = 0; row < 3; ++row) {
+                    transform->SetElement(row, axis, transform->GetElement(row, axis) * scale);
+                }
+            }
+        }
+    } else {
         transform->Identity();
         for (int i = 0; i < 3; ++i) {
             transform->SetElement(i, i, m_spacing[i]);
@@ -108,6 +127,22 @@ bool NiftiVolume::loadFromFile(const std::string& filePath)
     m_ijkToRas = transform;
     m_filePath = filePath;
     m_isLoaded = true;
+
+    std::cout << "Loaded NIfTI volume: " << filePath << std::endl;
+    std::cout << "  Dimensions: " << dims[0] << " x " << dims[1] << " x " << dims[2] << std::endl;
+    std::cout << "  Spacing: " << m_spacing[0] << ", " << m_spacing[1] << ", " << m_spacing[2] << std::endl;
+    std::cout << "  Origin: " << m_origin[0] << ", " << m_origin[1] << ", " << m_origin[2] << std::endl;
+    if (m_ijkToRas) {
+        std::cout << "  IJK->RAS matrix:" << std::endl;
+        for (int r = 0; r < 4; ++r) {
+            std::cout << "    ";
+            for (int c = 0; c < 4; ++c) {
+                std::cout << m_ijkToRas->GetElement(r, c) << (c < 3 ? ", " : "");
+            }
+            std::cout << std::endl;
+        }
+    }
+
     return true;
 }
 

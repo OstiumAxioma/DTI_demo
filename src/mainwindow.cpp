@@ -474,16 +474,28 @@ void MainWindow::openNiftiFile()
     }
 
     QFileInfo info(fileName);
+    const auto bbox = niftiVolume->computeBoundingBox();
+    const double centerX = 0.5 * (bbox.minX + bbox.maxX);
+    const double centerY = 0.5 * (bbox.minY + bbox.maxY);
+    const double centerZ = 0.5 * (bbox.minZ + bbox.maxZ);
+
     statusBar()->showMessage(
-        QString("已加载NIfTI：%1 | 体素 %2×%3×%4 | spacing %.2f / %.2f / %.2f mm")
+        QStringLiteral("已加载NIfTI：%1 | 体素 %2×%3×%4 | spacing %5 / %6 / %7 mm | center %8, %9, %10")
             .arg(info.fileName())
             .arg(dims[0])
             .arg(dims[1])
             .arg(dims[2])
-            .arg(spacing[0], 0, 'f', 2)
-            .arg(spacing[1], 0, 'f', 2)
-            .arg(spacing[2], 0, 'f', 2),
+            .arg(QString::number(spacing[0], 'f', 2))
+            .arg(QString::number(spacing[1], 'f', 2))
+            .arg(QString::number(spacing[2], 'f', 2))
+            .arg(QString::number(centerX, 'f', 2))
+            .arg(QString::number(centerY, 'f', 2))
+            .arg(QString::number(centerZ, 'f', 2)),
         6000);
+
+    std::cout << "NIfTI stats: dims(" << dims[0] << ", " << dims[1] << ", " << dims[2]
+              << ") spacing(" << spacing[0] << ", " << spacing[1] << ", " << spacing[2]
+              << ") center(" << centerX << ", " << centerY << ", " << centerZ << ")\n";
 }
 
 QString MainWindow::sliceAxisLabel(DTIFiberLib::SliceAxis axis) const
@@ -522,9 +534,9 @@ void MainWindow::applySliceSlider(DTIFiberLib::SliceAxis axis, int sliderValue)
     }
 
     if (slider) {
-        slider->setToolTip(QString("%1索引 %2 | %.2f mm")
+        slider->setToolTip(QStringLiteral("%1索引 %2 | %3 mm")
                                .arg(sliceAxisLabel(axis))
                                .arg(sliderValue)
-                               .arg(locationMM, 0, 'f', 2));
+                               .arg(QString::number(locationMM, 'f', 2)));
     }
 }

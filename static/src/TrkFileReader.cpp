@@ -3,6 +3,7 @@
 #include <fstream>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 
 namespace DTIFiberLib {
 
@@ -89,6 +90,18 @@ namespace DTIFiberLib {
         m_fiberTracks.clear();
 
         size_t trackIndex = 0;
+
+        auto hasVoxelToRas = [] (const float matrix[4][4]) {
+            for (int r = 0; r < 4; ++r) {
+                for (int c = 0; c < 4; ++c) {
+                    if (std::fabs(matrix[r][c]) > 1e-6f) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }(m_tractographyHeader.vox_to_ras);
+
         while (!m_file.eof()) {
             uint32_t n_points;
             m_file.read(reinterpret_cast<char*>(&n_points), sizeof(uint32_t));
@@ -142,6 +155,28 @@ namespace DTIFiberLib {
                           << ", Actual bytes read = " << (posAfter - posBefore) << std::endl;
             }
 
+            if (hasVoxelToRas) {
+                for (auto& point : track) {
+                    double in[4] = {point.x, point.y, point.z, 1.0};
+                    double out[4] = {0.0, 0.0, 0.0, 1.0};
+                    for (int r = 0; r < 4; ++r) {
+                        out[r] = 0.0;
+                        for (int c = 0; c < 4; ++c) {
+                            out[r] += static_cast<double>(m_tractographyHeader.vox_to_ras[r][c]) * in[c];
+                        }
+                    }
+                    point.x = static_cast<float>(out[0]);
+                    point.y = static_cast<float>(out[1]);
+                    point.z = static_cast<float>(out[2]);
+                }
+            } else {
+                for (auto& point : track) {
+                    point.x = point.x * m_tractographyHeader.voxel_size[0] + m_tractographyHeader.origin[0];
+                    point.y = point.y * m_tractographyHeader.voxel_size[1] + m_tractographyHeader.origin[1];
+                    point.z = point.z * m_tractographyHeader.voxel_size[2] + m_tractographyHeader.origin[2];
+                }
+            }
+
             m_fiberTracks.push_back(track);
         }
 
@@ -182,6 +217,17 @@ namespace DTIFiberLib {
         std::cout << "Property count: " << m_tractographyHeader.n_properties << std::endl;
         std::cout << "Header size: " << m_tractographyHeader.hdr_size << std::endl;
         std::cout << "Actual loaded tracks: " << m_fiberTracks.size() << std::endl;
+        std::cout << "vox_to_ras matrix:" << std::endl;
+        for (int r = 0; r < 4; ++r) {
+            std::cout << "  ";
+            for (int c = 0; c < 4; ++c) {
+                std::cout << m_tractographyHeader.vox_to_ras[r][c];
+                if (c < 3) {
+                    std::cout << ", ";
+                }
+            }
+            std::cout << std::endl;
+        }
     }
 
     bool TrkFileReader::ExportToJSON(const std::string& outputPath, size_t maxTracks) const {
