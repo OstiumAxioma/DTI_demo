@@ -1,5 +1,6 @@
 #include "../header/GLFiberRenderer.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -10,6 +11,16 @@ namespace {
 constexpr size_t MAX_CHUNK_BYTES = 32ull * 1024ull * 1024ull; // 32 MB
 constexpr int SHADING_GRID = 64;
 constexpr float SHADE_DISTANCE_CAP = 4.0f;
+constexpr std::array<std::array<int, 2>, 3> SLICE_PLANE_AXES = {
+    std::array<int, 2>{1, 2},
+    std::array<int, 2>{0, 2},
+    std::array<int, 2>{0, 1}
+};
+constexpr std::array<SliceAxis, 3> AXES = {
+    SliceAxis::Sagittal,
+    SliceAxis::Coronal,
+    SliceAxis::Axial
+};
 
 inline void computeDirection(const FiberTrack& track, size_t index, float& dirX, float& dirY, float& dirZ)
 {
@@ -279,8 +290,39 @@ void main() {
 }
 )";
 
+static const char* sliceVertexShaderSource = R"(
+#version 460 core
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec2 aUV;
+
+out vec2 vUV;
+
+uniform mat4 uMVPMatrix;
+
+void main() {
+    gl_Position = uMVPMatrix * vec4(aPosition, 1.0);
+    vUV = aUV;
+}
+)";
+
+static const char* sliceFragmentShaderSource = R"(
+#version 460 core
+in vec2 vUV;
+out vec4 FragmentColor;
+
+uniform sampler2D uSliceTexture;
+uniform float uSliceOpacity;
+
+void main() {
+    float intensity = texture(uSliceTexture, vUV).r;
+    vec3 color = vec3(intensity);
+    FragmentColor = vec4(color, uSliceOpacity);
+}
+)";
+
 GLFiberRenderer::GLFiberRenderer()
     : m_shader(nullptr)
+    , m_sliceShader(nullptr)
     , m_chunks()
     , m_data(nullptr)
     , m_dirty(true)
@@ -304,6 +346,10 @@ GLFiberRenderer::GLFiberRenderer()
     , m_lodEnabled(false)
     , m_maxPointsPerTrack(0)
     , m_initialized(false)
+    , m_volume(nullptr)
+    , m_sliceOpacity(0.55f)
+    , m_hasFiberBounds(false)
+    , m_hasVolumeBounds(false)
 {
     std::fill(&m_lightPositions[0][0], &m_lightPositions[0][0] + 6, 0.0f);
 }
@@ -326,6 +372,12 @@ void GLFiberRenderer::initialize()
         return;
     }
 
+    m_sliceShader = std::make_unique<GLShaderProgram>();
+    if (!m_sliceShader->loadFromString(sliceVertexShaderSource, sliceFragmentShaderSource)) {
+        std::cerr << "Failed to create slice shader program" << std::endl;
+        m_sliceShader.reset();
+    }
+
     m_initialized = true;
     if (m_dirty) {
         rebuildBuffers();
@@ -335,14 +387,21 @@ void GLFiberRenderer::initialize()
 void GLFiberRenderer::cleanup()
 {
     releaseChunks();
+    releaseSlicePlanes();
     m_shader.reset();
+    m_sliceShader.reset();
     m_initialized = false;
 }
 
 void GLFiberRenderer::setData(const GLFiberData& data)
 {
     m_data = &data;
-    updateBoundingBox(data.computeBoundingBox());
+    if (data.empty()) {
+        m_hasFiberBounds = false;
+        recalcSceneBounds();
+    } else {
+        updateBoundingBox(data.computeBoundingBox());
+    }
     m_dirty = true;
 }
 
@@ -379,7 +438,7 @@ void GLFiberRenderer::setLightingEnabled(bool enable)
 
 void GLFiberRenderer::setLightingStrength(float strengthFactor)
 {
-    m_lightingStrengthScale = std::clamp(strengthFactor, 0.0f, 2.0f);
+    m_lightingStrengthScale = std::clamp(strengthFactor, 0.0f, 5.0f);
     updateLighting();
 }
 
@@ -387,6 +446,77 @@ void GLFiberRenderer::setShadowStrength(float strength)
 {
     m_shadowStrength = std::clamp(strength, 0.0f, 0.1f);
     m_dirty = true;
+}
+
+void GLFiberRenderer::setNiftiVolume(const std::shared_ptr<NiftiVolume>& volume)
+{
+    if (m_initialized) {
+        releaseSlicePlanes();
+    } else {
+        for (auto& plane : m_slicePlanes) {
+            plane = SlicePlane{};
+        }
+    }
+
+    m_volume = volume;
+
+    if (!m_volume) {
+        for (auto& plane : m_slicePlanes) {
+            plane = SlicePlane{};
+        }
+        m_hasVolumeBounds = false;
+        recalcSceneBounds();
+        return;
+    }
+
+    m_volumeBounds = m_volume->computeBoundingBox();
+    m_hasVolumeBounds = true;
+
+    for (size_t axisIdx = 0; axisIdx < AXES.size(); ++axisIdx) {
+        auto& plane = m_slicePlanes[axisIdx];
+        const SliceAxis axis = AXES[axisIdx];
+        const int minIndex = m_volume->getExtentMin(axis);
+        const int sliceCount = m_volume->getSliceCount(axis);
+        plane.voxelIndex = minIndex + sliceCount / 2;
+        plane.pixelDirty = true;
+        plane.geometryDirty = true;
+        plane.texturePendingUpload = true;
+        plane.width = 0;
+        plane.height = 0;
+        plane.pixels.clear();
+    }
+
+    recalcSceneBounds();
+}
+
+void GLFiberRenderer::setSliceIndex(SliceAxis axis, int voxelIndex)
+{
+    if (!m_volume) {
+        return;
+    }
+    const size_t axisIdx = static_cast<size_t>(axis);
+    const int minIndex = m_volume->getExtentMin(axis);
+    const int maxIndex = m_volume->getExtentMax(axis);
+    const int clamped = std::clamp(voxelIndex, minIndex, maxIndex);
+    auto& plane = m_slicePlanes[axisIdx];
+    if (plane.voxelIndex == clamped) {
+        return;
+    }
+    plane.voxelIndex = clamped;
+    plane.pixelDirty = true;
+    plane.geometryDirty = true;
+    plane.texturePendingUpload = true;
+}
+
+int GLFiberRenderer::getSliceIndex(SliceAxis axis) const
+{
+    const size_t axisIdx = static_cast<size_t>(axis);
+    return m_slicePlanes[axisIdx].voxelIndex;
+}
+
+void GLFiberRenderer::setSliceOpacity(float alpha)
+{
+    m_sliceOpacity = std::clamp(alpha, 0.0f, 1.0f);
 }
 
 void GLFiberRenderer::setLODEnabled(bool enable)
@@ -576,13 +706,9 @@ void GLFiberRenderer::buildChunksForStyle(GLFiberData::TractStyle style,
 
 void GLFiberRenderer::updateBoundingBox(const GLFiberData::BoundingBox& box)
 {
-    m_minX = box.minX;
-    m_maxX = box.maxX;
-    m_minY = box.minY;
-    m_maxY = box.maxY;
-    m_minZ = box.minZ;
-    m_maxZ = box.maxZ;
-    updateLighting();
+    m_fiberBounds = box;
+    m_hasFiberBounds = true;
+    recalcSceneBounds();
 }
 
 void GLFiberRenderer::updateLighting()
@@ -609,6 +735,247 @@ void GLFiberRenderer::updateLighting()
     m_lightIntensity = std::clamp((0.8f / (0.2f + diag * 0.02f)) * scale, 0.15f, 2.0f);
 }
 
+void GLFiberRenderer::releaseSlicePlanes()
+{
+    for (auto& plane : m_slicePlanes) {
+        if (plane.texture != 0 && m_initialized) {
+            glDeleteTextures(1, &plane.texture);
+        }
+        if (plane.vbo != 0 && m_initialized) {
+            glDeleteBuffers(1, &plane.vbo);
+        }
+        if (plane.vao != 0 && m_initialized) {
+            glDeleteVertexArrays(1, &plane.vao);
+        }
+        plane = SlicePlane{};
+    }
+}
+
+void GLFiberRenderer::updateSlicePlaneResources(size_t axisIdx)
+{
+    if (!m_volume) {
+        return;
+    }
+    auto& plane = m_slicePlanes[axisIdx];
+    if (plane.voxelIndex < 0) {
+        return;
+    }
+
+    if (plane.pixelDirty) {
+        plane.pixelDirty = false;
+        if (m_volume->extractSlice(AXES[axisIdx],
+                                   plane.voxelIndex,
+                                   plane.pixels,
+                                   plane.width,
+                                   plane.height)) {
+            plane.texturePendingUpload = true;
+        }
+    }
+
+    if (plane.texturePendingUpload) {
+        uploadSliceTexture(axisIdx);
+    }
+
+    if (plane.geometryDirty) {
+        rebuildSliceGeometry(axisIdx);
+    }
+}
+
+void GLFiberRenderer::uploadSliceTexture(size_t axisIdx)
+{
+    if (!m_initialized) {
+        return;
+    }
+    auto& plane = m_slicePlanes[axisIdx];
+    if (plane.width <= 0 || plane.height <= 0 || plane.pixels.empty()) {
+        plane.texturePendingUpload = false;
+        return;
+    }
+
+    if (plane.texture == 0) {
+        glGenTextures(1, &plane.texture);
+    }
+    glBindTexture(GL_TEXTURE_2D, plane.texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D,
+                 0,
+                 GL_R8,
+                 plane.width,
+                 plane.height,
+                 0,
+                 GL_RED,
+                 GL_UNSIGNED_BYTE,
+                 plane.pixels.data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    plane.texturePendingUpload = false;
+}
+
+void GLFiberRenderer::rebuildSliceGeometry(size_t axisIdx)
+{
+    if (!m_initialized || !m_volume) {
+        return;
+    }
+
+    auto& plane = m_slicePlanes[axisIdx];
+    if (plane.voxelIndex < 0) {
+        return;
+    }
+
+    const int primaryAxis = static_cast<int>(axisIdx);
+    const int axisA = SLICE_PLANE_AXES[axisIdx][0];
+    const int axisB = SLICE_PLANE_AXES[axisIdx][1];
+
+    const SliceAxis axisAEnum = AXES[axisA];
+    const SliceAxis axisBEnum = AXES[axisB];
+
+    const double aEdges[2] = {
+        static_cast<double>(m_volume->getExtentMin(axisAEnum)) - 0.5,
+        static_cast<double>(m_volume->getExtentMax(axisAEnum)) + 0.5
+    };
+    const double bEdges[2] = {
+        static_cast<double>(m_volume->getExtentMin(axisBEnum)) - 0.5,
+        static_cast<double>(m_volume->getExtentMax(axisBEnum)) + 0.5
+    };
+
+    std::array<float, 20> buffer{};
+    size_t idx = 0;
+    for (int b = 0; b < 2; ++b) {
+        const double voxelB = bEdges[b];
+        for (int a = 0; a < 2; ++a) {
+            const double voxelA = aEdges[a];
+            std::array<double, 3> coords{};
+            coords[primaryAxis] = static_cast<double>(plane.voxelIndex);
+            coords[axisA] = voxelA;
+            coords[axisB] = voxelB;
+            const auto world = m_volume->voxelToWorld(coords[0], coords[1], coords[2]);
+
+            buffer[idx++] = static_cast<float>(world[0]);
+            buffer[idx++] = static_cast<float>(world[1]);
+            buffer[idx++] = static_cast<float>(world[2]);
+            buffer[idx++] = (a == 0) ? 0.0f : 1.0f;
+            buffer[idx++] = (b == 0) ? 0.0f : 1.0f;
+        }
+    }
+
+    if (plane.vao == 0) {
+        glGenVertexArrays(1, &plane.vao);
+    }
+    if (plane.vbo == 0) {
+        glGenBuffers(1, &plane.vbo);
+    }
+
+    glBindVertexArray(plane.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, plane.vbo);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(buffer.size() * sizeof(float)),
+                 buffer.data(),
+                 GL_DYNAMIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(5 * sizeof(float)), reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1,
+                          2,
+                          GL_FLOAT,
+                          GL_FALSE,
+                          static_cast<GLsizei>(5 * sizeof(float)),
+                          reinterpret_cast<void*>(3 * sizeof(float)));
+
+    glBindVertexArray(0);
+    plane.geometryDirty = false;
+}
+
+void GLFiberRenderer::renderSlices(const float* mvpMatrix)
+{
+    if (!m_sliceShader || !m_sliceShader->isValid() || !m_volume || m_sliceOpacity <= 0.0f) {
+        return;
+    }
+
+    bool hasRenderable = false;
+    for (size_t axisIdx = 0; axisIdx < AXES.size(); ++axisIdx) {
+        updateSlicePlaneResources(axisIdx);
+        const auto& plane = m_slicePlanes[axisIdx];
+        if (plane.texture != 0 && plane.vao != 0 && plane.width > 0 && plane.height > 0) {
+            hasRenderable = true;
+        }
+    }
+
+    if (!hasRenderable) {
+        return;
+    }
+
+    GLboolean previousDepthMask = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+
+    m_sliceShader->use();
+    m_sliceShader->setUniformMatrix4fv("uMVPMatrix", mvpMatrix);
+    m_sliceShader->setUniform1i("uSliceTexture", 0);
+    m_sliceShader->setUniform1f("uSliceOpacity", m_sliceOpacity);
+    glActiveTexture(GL_TEXTURE0);
+
+    for (size_t axisIdx = 0; axisIdx < AXES.size(); ++axisIdx) {
+        const auto& plane = m_slicePlanes[axisIdx];
+        if (plane.texture == 0 || plane.vao == 0 || plane.width <= 0 || plane.height <= 0) {
+            continue;
+        }
+
+        glBindVertexArray(plane.vao);
+        glBindTexture(GL_TEXTURE_2D, plane.texture);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDepthMask(previousDepthMask);
+    glDisable(GL_BLEND);
+}
+
+void GLFiberRenderer::recalcSceneBounds()
+{
+    if (!m_hasFiberBounds && !m_hasVolumeBounds) {
+        m_minX = m_minY = m_minZ = -50.0f;
+        m_maxX = m_maxY = m_maxZ = 50.0f;
+        updateLighting();
+        return;
+    }
+
+    auto applyBox = [&](const GLFiberData::BoundingBox& box) {
+        m_minX = std::min(m_minX, box.minX);
+        m_maxX = std::max(m_maxX, box.maxX);
+        m_minY = std::min(m_minY, box.minY);
+        m_maxY = std::max(m_maxY, box.maxY);
+        m_minZ = std::min(m_minZ, box.minZ);
+        m_maxZ = std::max(m_maxZ, box.maxZ);
+    };
+
+    m_minX = std::numeric_limits<float>::max();
+    m_minY = std::numeric_limits<float>::max();
+    m_minZ = std::numeric_limits<float>::max();
+    m_maxX = std::numeric_limits<float>::lowest();
+    m_maxY = std::numeric_limits<float>::lowest();
+    m_maxZ = std::numeric_limits<float>::lowest();
+
+    if (m_hasFiberBounds) {
+        applyBox(m_fiberBounds);
+    }
+    if (m_hasVolumeBounds) {
+        applyBox(m_volumeBounds);
+    }
+
+    updateLighting();
+}
+
 void GLFiberRenderer::render(const float* mvpMatrix)
 {
     if (!m_initialized || !m_shader || !m_shader->isValid()) {
@@ -618,6 +985,8 @@ void GLFiberRenderer::render(const float* mvpMatrix)
     if (m_dirty) {
         rebuildBuffers();
     }
+
+    renderSlices(mvpMatrix);
 
     if (m_chunks.empty()) {
         return;

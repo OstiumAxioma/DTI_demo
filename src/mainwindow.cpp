@@ -17,6 +17,7 @@
 #include <QHBoxLayout>
 #include <QDir>
 #include <QStringList>
+#include <QSignalBlocker>
 #include <random>
 #include <algorithm>
 #include <iostream>
@@ -31,9 +32,14 @@ MainWindow::MainWindow(QWidget *parent)
     , glFiberRenderer(std::make_unique<DTIFiberLib::GLFiberRenderer>())
     , lightingSlider(nullptr)
     , shadowSlider(nullptr)
+    , sagittalSlider(nullptr)
+    , coronalSlider(nullptr)
+    , axialSlider(nullptr)
 {
     setWindowTitle("DTI Fiber Viewer - OpenGL");
     resize(800, 600);
+    niftiExtentMin.fill(0);
+    niftiSpacing.fill(1.0);
 
     createActions();
     createMenus();
@@ -76,6 +82,10 @@ void MainWindow::createActions()
     openTrkAct->setShortcut(QKeySequence::Open);
     openTrkAct->setStatusTip("打开TrackVis .trk文件");
     connect(openTrkAct, &QAction::triggered, this, &MainWindow::openTrkFile);
+
+    openNiftiAct = new QAction("打开NIfTI文件(&N)", this);
+    openNiftiAct->setStatusTip("加载并显示NIfTI体数据切片");
+    connect(openNiftiAct, &QAction::triggered, this, &MainWindow::openNiftiFile);
 
     toggleShadingAct = new QAction("启用阴影(&S)", this);
     toggleShadingAct->setCheckable(true);
@@ -163,10 +173,26 @@ void MainWindow::onShadowSliderChanged(int value)
     glWidget->update();
 }
 
+void MainWindow::onSagittalSliceChanged(int value)
+{
+    applySliceSlider(DTIFiberLib::SliceAxis::Sagittal, value);
+}
+
+void MainWindow::onCoronalSliceChanged(int value)
+{
+    applySliceSlider(DTIFiberLib::SliceAxis::Coronal, value);
+}
+
+void MainWindow::onAxialSliceChanged(int value)
+{
+    applySliceSlider(DTIFiberLib::SliceAxis::Axial, value);
+}
+
 void MainWindow::createMenus()
 {
     fileMenu = menuBar()->addMenu("文件(&F)");
     fileMenu->addAction(openTrkAct);
+    fileMenu->addAction(openNiftiAct);
     fileMenu->addAction(toggleShadingAct);
     fileMenu->addSeparator();
     fileMenu->addAction(exitAct);
@@ -179,6 +205,7 @@ void MainWindow::createToolBars()
 {
     fileToolBar = addToolBar("文件");
     fileToolBar->addAction(openTrkAct);
+    fileToolBar->addAction(openNiftiAct);
     fileToolBar->addAction(toggleShadingAct);
     fileToolBar->addAction(exitAct);
 
@@ -209,6 +236,51 @@ void MainWindow::createToolBars()
     shadowLayout->addWidget(shadowSlider);
     fileToolBar->addWidget(shadowWidget);
     connect(shadowSlider, &QSlider::valueChanged, this, &MainWindow::onShadowSliderChanged);
+
+    QWidget* sagittalWidget = new QWidget(fileToolBar);
+    QHBoxLayout* sagittalLayout = new QHBoxLayout(sagittalWidget);
+    sagittalLayout->setContentsMargins(6, 0, 6, 0);
+    QLabel* sagittalLabel = new QLabel("矢状", sagittalWidget);
+    sagittalSlider = new QSlider(Qt::Horizontal, sagittalWidget);
+    sagittalSlider->setRange(0, 0);
+    sagittalSlider->setValue(0);
+    sagittalSlider->setEnabled(false);
+    sagittalSlider->setFixedWidth(120);
+    sagittalSlider->setToolTip("矢状面切片索引");
+    sagittalLayout->addWidget(sagittalLabel);
+    sagittalLayout->addWidget(sagittalSlider);
+    fileToolBar->addWidget(sagittalWidget);
+    connect(sagittalSlider, &QSlider::valueChanged, this, &MainWindow::onSagittalSliceChanged);
+
+    QWidget* coronalWidget = new QWidget(fileToolBar);
+    QHBoxLayout* coronalLayout = new QHBoxLayout(coronalWidget);
+    coronalLayout->setContentsMargins(6, 0, 6, 0);
+    QLabel* coronalLabel = new QLabel("冠状", coronalWidget);
+    coronalSlider = new QSlider(Qt::Horizontal, coronalWidget);
+    coronalSlider->setRange(0, 0);
+    coronalSlider->setValue(0);
+    coronalSlider->setEnabled(false);
+    coronalSlider->setFixedWidth(120);
+    coronalSlider->setToolTip("冠状面切片索引");
+    coronalLayout->addWidget(coronalLabel);
+    coronalLayout->addWidget(coronalSlider);
+    fileToolBar->addWidget(coronalWidget);
+    connect(coronalSlider, &QSlider::valueChanged, this, &MainWindow::onCoronalSliceChanged);
+
+    QWidget* axialWidget = new QWidget(fileToolBar);
+    QHBoxLayout* axialLayout = new QHBoxLayout(axialWidget);
+    axialLayout->setContentsMargins(6, 0, 6, 0);
+    QLabel* axialLabel = new QLabel("轴向", axialWidget);
+    axialSlider = new QSlider(Qt::Horizontal, axialWidget);
+    axialSlider->setRange(0, 0);
+    axialSlider->setValue(0);
+    axialSlider->setEnabled(false);
+    axialSlider->setFixedWidth(120);
+    axialSlider->setToolTip("轴向切片索引");
+    axialLayout->addWidget(axialLabel);
+    axialLayout->addWidget(axialSlider);
+    fileToolBar->addWidget(axialWidget);
+    connect(axialSlider, &QSlider::valueChanged, this, &MainWindow::onAxialSliceChanged);
 }
 
 void MainWindow::createStatusBar()
@@ -329,5 +401,130 @@ void MainWindow::openTrkFile()
         QMessageBox::critical(this, "错误",
             QString("读取TRK文件时发生异常：%1").arg(e.what()));
         statusBar()->showMessage("读取TRK文件异常", 3000);
+    }
+}
+
+void MainWindow::openNiftiFile()
+{
+    if (!glFiberRenderer) {
+        return;
+    }
+
+    const QString fileName = QFileDialog::getOpenFileName(
+        this,
+        "选择一个NIfTI文件",
+        "data",
+        "NIfTI Files (*.nii *.nii.gz);;All Files (*)");
+
+    if (fileName.isEmpty()) {
+        return;
+    }
+
+    auto volume = std::make_shared<DTIFiberLib::NiftiVolume>();
+    if (!volume->loadFromFile(fileName.toStdString())) {
+        QMessageBox::warning(this,
+                             "NIfTI加载失败",
+                             QString("无法加载NIfTI文件：\n%1").arg(fileName));
+        return;
+    }
+
+    niftiVolume = volume;
+    const auto dims = volume->getDimensions();
+    const auto spacing = volume->getSpacing();
+    niftiSpacing = spacing;
+    for (size_t axis = 0; axis < niftiExtentMin.size(); ++axis) {
+        niftiExtentMin[axis] = volume->getExtentMin(static_cast<DTIFiberLib::SliceAxis>(axis));
+    }
+
+    glFiberRenderer->setNiftiVolume(niftiVolume);
+    glFiberRenderer->setSliceOpacity(0.5f);
+
+    auto configureSlider = [&](QSlider* slider, DTIFiberLib::SliceAxis axis) {
+        if (!slider || !niftiVolume) {
+            return;
+        }
+        const int sliceCount = niftiVolume->getSliceCount(axis);
+        slider->setEnabled(sliceCount > 1);
+        if (sliceCount > 0) {
+            slider->setRange(0, sliceCount - 1);
+        } else {
+            slider->setRange(0, 0);
+        }
+
+        const int defaultValue = sliceCount > 0 ? sliceCount / 2 : 0;
+        {
+            QSignalBlocker blocker(slider);
+            slider->setValue(defaultValue);
+        }
+
+        if (sliceCount > 0) {
+            applySliceSlider(axis, defaultValue);
+        }
+    };
+
+    configureSlider(sagittalSlider, DTIFiberLib::SliceAxis::Sagittal);
+    configureSlider(coronalSlider, DTIFiberLib::SliceAxis::Coronal);
+    configureSlider(axialSlider, DTIFiberLib::SliceAxis::Axial);
+
+    float minX, maxX, minY, maxY, minZ, maxZ;
+    glFiberRenderer->getBoundingBox(minX, maxX, minY, maxY, minZ, maxZ);
+    if (glWidget) {
+        glWidget->setBoundingBox(minX, maxX, minY, maxY, minZ, maxZ);
+        glWidget->update();
+    }
+
+    QFileInfo info(fileName);
+    statusBar()->showMessage(
+        QString("已加载NIfTI：%1 | 体素 %2×%3×%4 | spacing %.2f / %.2f / %.2f mm")
+            .arg(info.fileName())
+            .arg(dims[0])
+            .arg(dims[1])
+            .arg(dims[2])
+            .arg(spacing[0], 0, 'f', 2)
+            .arg(spacing[1], 0, 'f', 2)
+            .arg(spacing[2], 0, 'f', 2),
+        6000);
+}
+
+QString MainWindow::sliceAxisLabel(DTIFiberLib::SliceAxis axis) const
+{
+    switch (axis) {
+    case DTIFiberLib::SliceAxis::Sagittal: return "矢状";
+    case DTIFiberLib::SliceAxis::Coronal: return "冠状";
+    case DTIFiberLib::SliceAxis::Axial: return "轴向";
+    default: return QStringLiteral("未知");
+    }
+}
+
+void MainWindow::applySliceSlider(DTIFiberLib::SliceAxis axis, int sliderValue)
+{
+    if (!glFiberRenderer || !niftiVolume) {
+        return;
+    }
+
+    const int voxelIndex = niftiVolume->sliderToVoxel(axis, sliderValue);
+    glFiberRenderer->setSliceIndex(axis, voxelIndex);
+
+    if (glWidget) {
+        glWidget->update();
+    }
+
+    const auto spacing = niftiVolume->getSpacing();
+    const int axisIdx = static_cast<int>(axis);
+    const double locationMM = spacing[axisIdx] * (voxelIndex - niftiExtentMin[axisIdx]);
+
+    QSlider* slider = nullptr;
+    switch (axis) {
+    case DTIFiberLib::SliceAxis::Sagittal: slider = sagittalSlider; break;
+    case DTIFiberLib::SliceAxis::Coronal: slider = coronalSlider; break;
+    case DTIFiberLib::SliceAxis::Axial: slider = axialSlider; break;
+    default: break;
+    }
+
+    if (slider) {
+        slider->setToolTip(QString("%1索引 %2 | %.2f mm")
+                               .arg(sliceAxisLabel(axis))
+                               .arg(sliderValue)
+                               .arg(locationMM, 0, 'f', 2));
     }
 }

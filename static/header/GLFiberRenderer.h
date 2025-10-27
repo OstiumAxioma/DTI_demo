@@ -3,10 +3,12 @@
 
 #include "GLFiberData.h"
 #include "GLShaderProgram.h"
+#include "NiftiVolume.h"
 #include <functional>
 #include <memory>
 #include <vector>
 #include <glad/glad.h>
+#include <array>
 
 namespace DTIFiberLib {
 
@@ -37,6 +39,13 @@ public:
     void setLightingStrength(float strengthFactor);
     void setShadowStrength(float strength);
     void setLightingEnabled(bool enable);
+
+    // Volume rendering interface
+    void setNiftiVolume(const std::shared_ptr<NiftiVolume>& volume);
+    void setSliceIndex(SliceAxis axis, int voxelIndex);
+    int getSliceIndex(SliceAxis axis) const;
+    void setSliceOpacity(float alpha);
+    bool hasVolume() const { return static_cast<bool>(m_volume); }
 
     // Rendering control
     void initialize();  // Must be called after OpenGL context is created
@@ -76,9 +85,16 @@ private:
     void setupChunkAttributes(ChunkBuffer& chunk) const;
     void updateBoundingBox(const GLFiberData::BoundingBox& box);
     void updateLighting();
+    void recalcSceneBounds();
+    void releaseSlicePlanes();
+    void updateSlicePlaneResources(size_t axisIdx);
+    void uploadSliceTexture(size_t axisIdx);
+    void rebuildSliceGeometry(size_t axisIdx);
+    void renderSlices(const float* mvpMatrix);
 
     // OpenGL resources
     std::unique_ptr<GLShaderProgram> m_shader;
+    std::unique_ptr<GLShaderProgram> m_sliceShader;
     std::vector<ChunkBuffer> m_chunks;
 
     // Data
@@ -110,6 +126,28 @@ private:
     size_t m_maxPointsPerTrack;
 
     bool m_initialized;
+
+    struct SlicePlane {
+        GLuint vao = 0;
+        GLuint vbo = 0;
+        GLuint texture = 0;
+        int width = 0;
+        int height = 0;
+        int voxelIndex = -1;
+        bool pixelDirty = false;
+        bool geometryDirty = false;
+        bool texturePendingUpload = false;
+        std::vector<uint8_t> pixels;
+    };
+
+    std::array<SlicePlane, 3> m_slicePlanes;
+    std::shared_ptr<NiftiVolume> m_volume;
+    float m_sliceOpacity;
+
+    GLFiberData::BoundingBox m_fiberBounds;
+    GLFiberData::BoundingBox m_volumeBounds;
+    bool m_hasFiberBounds;
+    bool m_hasVolumeBounds;
 };
 
 } // namespace DTIFiberLib

@@ -17,3 +17,8 @@ Existing history favors concise Mandarin, verb-led summaries (e.g., `优化大�
 
 ## Data Handling & Configuration
 Never commit new raw medical datasets; share access instructions instead. Large `.trk` files already tracked are test fixtures—avoid duplicating them and prefer down-sampled subsets when feasible. Record local configuration overrides (Qt, VTK paths) in `config.cmake` but do not hard-code machine-specific absolute paths in CMake or source files. If you need secrets or licenses, load them from environment variables rather than the repository.
+
+## Recent Rendering Updates (2025-10-24)
+- Fiber shading now mirrors DSI Studio: a 64³ occlusion volume with mean-filtered min/max maps drives per-vertex shadow factors while preserving a 0.05 brightness floor.
+- Two dynamic point lights are anchored at the bounding-box diagonals; their intensity/ambient terms adapt to the dataset size and can be toggled or scaled via UI sliders.
+- Tool bar includes “光照” and “阴影” sliders (0–100) that call `setLightingStrength`, `setLightingEnabled`, and `setShadowStrength`, enabling quick tuning without reloading data.

@@ -145,23 +145,23 @@ endif()
 # 查找DTI静态库文件
 find_library(DTIFIBER_LIB_RELEASE 
     NAMES DTIFiberLib
-    PATHS ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    PATHS ${CMAKE_CURRENT_SOURCE_DIR}/static/build/lib/Release
     NO_DEFAULT_PATH
 )
 
 find_library(DTIFIBER_LIB_DEBUG
-    NAMES DTIFiberLib_d
-    PATHS ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    NAMES DTIFiberLib
+    PATHS ${CMAKE_CURRENT_SOURCE_DIR}/static/build/lib/Debug
     NO_DEFAULT_PATH
 )
 
 # 检查是否找到静态库
 if(NOT DTIFIBER_LIB_RELEASE)
-    message(WARNING "DTIFiberLib.lib not found in ${CMAKE_CURRENT_SOURCE_DIR}/lib")
+    message(WARNING "DTIFiberLib.lib not found in ${CMAKE_CURRENT_SOURCE_DIR}/static/build/lib/Release")
 endif()
 
 if(NOT DTIFIBER_LIB_DEBUG)
-    message(WARNING "DTIFiberLib_d.lib not found in ${CMAKE_CURRENT_SOURCE_DIR}/lib")
+    message(WARNING "DTIFiberLib.lib not found in ${CMAKE_CURRENT_SOURCE_DIR}/static/build/lib/Debug")
 endif()
 
 # 链接库

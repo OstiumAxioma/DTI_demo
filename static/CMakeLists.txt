@@ -90,6 +90,7 @@ set(SOURCES
     src/GLShaderProgram.cpp
     src/GLFiberData.cpp
     src/GLFiberRenderer.cpp
+    src/NiftiVolume.cpp
     src/glad.c
 )
 
@@ -99,6 +100,7 @@ set(HEADERS
     header/TrkFileReader.h
     header/GLShaderProgram.h
     header/GLFiberRenderer.h
+    header/NiftiVolume.h
 )
 
 # 创建静态库

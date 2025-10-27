@@ -19,6 +19,7 @@
 #include "GLFiberData.h"
 #include "GLFiberRenderer.h"
 #include "GLShaderProgram.h"
+#include "NiftiVolume.h"
 
 // Library version information
 #define DTIFIBERLIB_VERSION_MAJOR 2
