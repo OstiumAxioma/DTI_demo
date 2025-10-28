@@ -55,6 +55,7 @@ inline void computeDirection(const FiberTrack& track, size_t index, float& dirX,
 class OcclusionVolume {
 public:
     void build(const std::vector<GLFiberData::TrackEntry>& tracks,
+               const GLFiberData& data,
                const GLFiberData::BoundingBox& box)
     {
         m_valid = false;
@@ -86,6 +87,9 @@ public:
         bool anyPoint = false;
 
         for (const auto& entry : tracks) {
+            if (!data.isTrackVisible(entry)) {
+                continue;
+            }
             for (const auto& point : entry.track) {
                 anyPoint = true;
                 const int xIdx = clampIndex((point.x - m_boxMinX) * m_scaleX);
@@ -559,7 +563,7 @@ void GLFiberRenderer::rebuildBuffers()
 
     OcclusionVolume occlusion;
     occlusion.setStrength(m_shadowStrength);
-    occlusion.build(tracks, box);
+    occlusion.build(tracks, *m_data, box);
 
     std::function<float(float, float, float)> shadeFn;
     if (occlusion.valid()) {
@@ -626,6 +630,9 @@ void GLFiberRenderer::buildChunksForStyle(GLFiberData::TractStyle style,
                                       : std::numeric_limits<size_t>::max();
 
     for (const auto& entry : tracks) {
+        if (m_data && !m_data->isTrackVisible(entry)) {
+            continue;
+        }
         if (entry.style != style) {
             continue;
         }

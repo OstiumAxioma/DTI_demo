@@ -17,6 +17,9 @@
 #include <QHBoxLayout>
 #include <QDir>
 #include <QStringList>
+#include <QDockWidget>
+#include <QListWidget>
+#include <QListWidgetItem>
 #include <QSignalBlocker>
 #include <random>
 #include <algorithm>
@@ -35,6 +38,9 @@ MainWindow::MainWindow(QWidget *parent)
     , sagittalSlider(nullptr)
     , coronalSlider(nullptr)
     , axialSlider(nullptr)
+    , datasetDock(nullptr)
+    , datasetList(nullptr)
+    , suppressDatasetSignal(false)
 {
     setWindowTitle("DTI Fiber Viewer - OpenGL");
     resize(800, 600);
@@ -44,6 +50,7 @@ MainWindow::MainWindow(QWidget *parent)
     createActions();
     createMenus();
     createToolBars();
+    createDatasetDock();
     createStatusBar();
 
     // Initialize OpenGL widget
@@ -283,6 +290,62 @@ void MainWindow::createToolBars()
     connect(axialSlider, &QSlider::valueChanged, this, &MainWindow::onAxialSliceChanged);
 }
 
+void MainWindow::createDatasetDock()
+{
+    datasetDock = new QDockWidget("数据集", this);
+    datasetDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    datasetList = new QListWidget(datasetDock);
+    datasetList->setSelectionMode(QAbstractItemView::NoSelection);
+    datasetList->setUniformItemSizes(true);
+    datasetDock->setWidget(datasetList);
+    addDockWidget(Qt::RightDockWidgetArea, datasetDock);
+    connect(datasetList, &QListWidget::itemChanged, this, &MainWindow::handleDatasetVisibilityChange);
+}
+
+void MainWindow::refreshDatasetList()
+{
+    if (!datasetList || !glFiberData) {
+        return;
+    }
+
+    suppressDatasetSignal = true;
+    datasetList->clear();
+
+    const auto& datasets = glFiberData->getDatasets();
+    for (size_t i = 0; i < datasets.size(); ++i) {
+        const auto& info = datasets[i];
+        auto* item = new QListWidgetItem(QString::fromStdString(info.name), datasetList);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(info.visible ? Qt::Checked : Qt::Unchecked);
+        item->setData(Qt::UserRole, static_cast<qulonglong>(i));
+    }
+
+    suppressDatasetSignal = false;
+}
+
+void MainWindow::handleDatasetVisibilityChange(QListWidgetItem* item)
+{
+    if (suppressDatasetSignal || !item || !glFiberData || !glFiberRenderer) {
+        return;
+    }
+
+    const size_t datasetIndex = static_cast<size_t>(item->data(Qt::UserRole).toULongLong());
+    const bool visible = item->checkState() == Qt::Checked;
+    if (!glFiberData->setDatasetVisibility(datasetIndex, visible)) {
+        return;
+    }
+
+    glFiberRenderer->setData(*glFiberData);
+    if (glWidget) {
+        glWidget->update();
+    }
+
+    statusBar()->showMessage(QString("%1 可见性: %2")
+                                 .arg(item->text())
+                                 .arg(visible ? "显示" : "隐藏"),
+                             2000);
+}
+
 void MainWindow::createStatusBar()
 {
     statusBar()->showMessage("就绪");
@@ -395,6 +458,7 @@ void MainWindow::openTrkFile()
         if (!skippedDuplicates.isEmpty()) {
             summary += QString("；已忽略：%1").arg(skippedDuplicates.join(", "));
         }
+        refreshDatasetList();
         statusBar()->showMessage(summary, 6000);
 
     } catch (const std::exception& e) {
@@ -540,3 +604,6 @@ void MainWindow::applySliceSlider(DTIFiberLib::SliceAxis axis, int sliderValue)
                                .arg(QString::number(locationMM, 'f', 2)));
     }
 }
+#include <QAbstractItemView>
+
+

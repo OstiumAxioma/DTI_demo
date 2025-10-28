@@ -26,6 +26,14 @@ public:
         TractStyle style = TractStyle::Line;
         std::vector<float> trackParam;   // user supplied metric (e.g. QA) per point or per track
         std::string datasetName;         // originating .trk file (basename without extension)
+        size_t datasetId = 0;            // index into dataset metadata table
+    };
+
+    struct DatasetInfo {
+        std::string name;
+        size_t startIndex = 0;
+        size_t trackCount = 0;
+        bool visible = true;
     };
 
     struct BoundingBox {
@@ -65,6 +73,26 @@ public:
     const std::vector<TrackEntry>& getTracks() const { return m_tracks; }
 
     /**
+     * @return Dataset metadata table.
+     */
+    const std::vector<DatasetInfo>& getDatasets() const { return m_datasets; }
+
+    /**
+     * @brief Set visibility for dataset by index.
+     */
+    bool setDatasetVisibility(size_t datasetIndex, bool visible);
+
+    /**
+     * @brief Returns visibility for dataset index.
+     */
+    bool isDatasetVisible(size_t datasetIndex) const;
+
+    /**
+     * @brief Convenience check for a track entry visibility.
+     */
+    bool isTrackVisible(const TrackEntry& entry) const;
+
+    /**
      * @return True if no track is stored.
      */
     bool empty() const { return m_tracks.empty(); }
@@ -76,6 +104,7 @@ public:
 
 private:
     std::vector<TrackEntry> m_tracks;
+    std::vector<DatasetInfo> m_datasets;
 };
 
 } // namespace DTIFiberLib

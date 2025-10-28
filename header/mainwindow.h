@@ -15,6 +15,9 @@ class QStatusBar;
 class QToolBar;
 class QSlider;
 class QLabel;
+class QListWidget;
+class QListWidgetItem;
+class QDockWidget;
 QT_END_NAMESPACE
 
 class GLFiberWidget;
@@ -67,6 +70,9 @@ private:
     QSlider *sagittalSlider;
     QSlider *coronalSlider;
     QSlider *axialSlider;
+    QDockWidget *datasetDock;
+    QListWidget *datasetList;
+    bool suppressDatasetSignal;
 
     // DTI library components
     std::vector<std::unique_ptr<DTIFiberLib::TrkFileReader>> trkReaders;
@@ -81,6 +87,9 @@ private:
                                   DTIFiberLib::TrkFileReader& reader);
     void applySliceSlider(DTIFiberLib::SliceAxis axis, int sliderValue);
     QString sliceAxisLabel(DTIFiberLib::SliceAxis axis) const;
+    void createDatasetDock();
+    void refreshDatasetList();
+    void handleDatasetVisibilityChange(QListWidgetItem* item);
 };
 
 #endif // MAINWINDOW_H
