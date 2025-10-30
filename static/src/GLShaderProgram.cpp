@@ -1,6 +1,8 @@
 #include "../header/GLShaderProgram.h"
 #include <iostream>
 #include <vector>
+#include <glad/glad.h>
+#include <string.h>
 
 namespace DTIFiberLib {
 

@@ -1,6 +1,10 @@
 #include "../header/GLFiberData.h"
 #include <algorithm>
 #include <limits>
+#include <string>
+#include <utility>
+#include <vector>
+#include <TrkFileReader.h>
 
 namespace DTIFiberLib {
 

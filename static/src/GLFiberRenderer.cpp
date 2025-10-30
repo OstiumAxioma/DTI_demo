@@ -4,6 +4,14 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <NiftiVolume.h>
+#include <TrkFileReader.h>
+#include <GLFiberData.h>
+#include <vector>
+#include <memory>
+#include <GLShaderProgram.h>
+#include <functional>
+#include <glad/glad.h>
 
 namespace DTIFiberLib {
 namespace {
@@ -11,6 +19,7 @@ namespace {
 constexpr size_t MAX_CHUNK_BYTES = 32ull * 1024ull * 1024ull; // 32 MB
 constexpr int SHADING_GRID = 64;
 constexpr float SHADE_DISTANCE_CAP = 4.0f;
+constexpr float SHADOW_ENDPOINT_RATIO = 0.125f;
 constexpr std::array<std::array<int, 2>, 3> SLICE_PLANE_AXES = {
     std::array<int, 2>{1, 2},
     std::array<int, 2>{0, 2},
@@ -145,17 +154,20 @@ public:
             return 1.0f;
         }
 
-        const int xIdx = clampIndex((x - m_boxMinX) * m_scaleX);
-        const int yIdx = clampIndex((y - m_boxMinY) * m_scaleY);
-        const int zIdx = clampIndex((z - m_boxMinZ) * m_scaleZ);
+        const float xCoord = (x - m_boxMinX) * m_scaleX;
+        const float yCoord = (y - m_boxMinY) * m_scaleY;
+        const float zCoord = (z - m_boxMinZ) * m_scaleZ;
 
-        const size_t idxYZ = static_cast<size_t>(yIdx) + static_cast<size_t>(zIdx) * SHADING_GRID;
-        const size_t idxXZ = static_cast<size_t>(xIdx) + static_cast<size_t>(zIdx) * SHADING_GRID;
-        const size_t idxXY = static_cast<size_t>(xIdx) + static_cast<size_t>(yIdx) * SHADING_GRID;
+        const float minX = sampleGridBilinear(m_gridMinX, yCoord, zCoord);
+        const float maxX = sampleGridBilinear(m_gridMaxX, yCoord, zCoord);
+        const float minY = sampleGridBilinear(m_gridMinY, xCoord, zCoord);
+        const float maxY = sampleGridBilinear(m_gridMaxY, xCoord, zCoord);
+        const float minZ = sampleGridBilinear(m_gridMinZ, xCoord, yCoord);
+        const float maxZ = sampleGridBilinear(m_gridMaxZ, xCoord, yCoord);
 
-        const float distX = axisDistance(x, m_gridMinX[idxYZ], m_gridMaxX[idxYZ]);
-        const float distY = axisDistance(y, m_gridMinY[idxXZ], m_gridMaxY[idxXZ]);
-        const float distZ = axisDistance(z, m_gridMinZ[idxXY], m_gridMaxZ[idxXY]);
+        const float distX = axisDistance(x, minX, maxX);
+        const float distY = axisDistance(y, minY, maxY);
+        const float distZ = axisDistance(z, minZ, maxZ);
 
         const float totalDistance = distX + distY + distZ;
         const float attenuation = std::min(totalDistance * m_strength, 0.95f);
@@ -176,6 +188,40 @@ private:
         const float positive = std::max(0.0f, maxVal - pos);
         const float negative = std::max(0.0f, pos - minVal);
         return std::min(std::min(positive, negative), SHADE_DISTANCE_CAP);
+    }
+
+    static float clampCoord(float value)
+    {
+        return std::clamp(value, 0.0f, static_cast<float>(SHADING_GRID - 1));
+    }
+
+    float sampleGridBilinear(const std::vector<float>& grid, float coordA, float coordB) const
+    {
+        const float a = clampCoord(coordA);
+        const float b = clampCoord(coordB);
+
+        const int a0 = static_cast<int>(std::floor(a));
+        const int b0 = static_cast<int>(std::floor(b));
+        const int a1 = std::min(a0 + 1, SHADING_GRID - 1);
+        const int b1 = std::min(b0 + 1, SHADING_GRID - 1);
+
+        const float ta = a - static_cast<float>(a0);
+        const float tb = b - static_cast<float>(b0);
+
+        const size_t stride = static_cast<size_t>(SHADING_GRID);
+        const size_t idx00 = static_cast<size_t>(b0) * stride + static_cast<size_t>(a0);
+        const size_t idx10 = static_cast<size_t>(b0) * stride + static_cast<size_t>(a1);
+        const size_t idx01 = static_cast<size_t>(b1) * stride + static_cast<size_t>(a0);
+        const size_t idx11 = static_cast<size_t>(b1) * stride + static_cast<size_t>(a1);
+
+        const float v00 = grid[idx00];
+        const float v10 = grid[idx10];
+        const float v01 = grid[idx01];
+        const float v11 = grid[idx11];
+
+        const float v0 = v00 + (v10 - v00) * ta;
+        const float v1 = v01 + (v11 - v01) * ta;
+        return v0 + (v1 - v0) * tb;
     }
 
     void smoothGrid(std::vector<float>& grid)
@@ -337,7 +383,7 @@ GLFiberRenderer::GLFiberRenderer()
     , m_enableLighting(true)
     , m_lightAmbient(0.35f)
     , m_lightIntensity(0.6f)
-    , m_lightingStrengthScale(1.0f)
+    , m_lightingStrengthScale(2.0f)
     , m_renderedTrackCount(0)
     , m_totalPointCount(0)
     , m_minX(0.0f)
@@ -346,12 +392,12 @@ GLFiberRenderer::GLFiberRenderer()
     , m_maxY(0.0f)
     , m_minZ(0.0f)
     , m_maxZ(0.0f)
-    , m_shadowStrength(0.02f)
+    , m_shadowStrength(0.1f)
     , m_lodEnabled(false)
     , m_maxPointsPerTrack(0)
     , m_initialized(false)
     , m_volume(nullptr)
-    , m_sliceOpacity(0.55f)
+    , m_sliceOpacity(1.0f)
     , m_hasFiberBounds(false)
     , m_hasVolumeBounds(false)
 {
@@ -448,7 +494,7 @@ void GLFiberRenderer::setLightingStrength(float strengthFactor)
 
 void GLFiberRenderer::setShadowStrength(float strength)
 {
-    m_shadowStrength = std::clamp(strength, 0.0f, 0.1f);
+    m_shadowStrength = std::clamp(strength, 0.0f, 1.0f);
     m_dirty = true;
 }
 
@@ -567,7 +613,7 @@ void GLFiberRenderer::rebuildBuffers()
 
     std::function<float(float, float, float)> shadeFn;
     if (occlusion.valid()) {
-        shadeFn = [occlusion](float x, float y, float z) {
+        shadeFn = [&occlusion](float x, float y, float z) {
             return occlusion.occlusion(x, y, z);
         };
     }
@@ -643,6 +689,52 @@ void GLFiberRenderer::buildChunksForStyle(GLFiberData::TractStyle style,
         }
 
         const size_t pointBudget = std::min(track.size(), maxPointsLimit);
+        if (pointBudget == 0) {
+            continue;
+        }
+
+        std::vector<float> shadeValues;
+        if (shadeFn) {
+            shadeValues.resize(pointBudget, 1.0f);
+            for (size_t i = 0; i < pointBudget; ++i) {
+                shadeValues[i] = std::clamp(shadeFn(track[i].x, track[i].y, track[i].z), 0.05f, 1.0f);
+            }
+
+            if (pointBudget > 1) {
+                std::vector<float> smoothed(pointBudget, 1.0f);
+                static constexpr float kernel[5] = {1.0f, 2.0f, 3.0f, 2.0f, 1.0f};
+                for (size_t i = 0; i < pointBudget; ++i) {
+                    float weighted = 0.0f;
+                    float weightSum = 0.0f;
+                    for (int k = -2; k <= 2; ++k) {
+                        const int sampleIdx = static_cast<int>(i) + k;
+                        if (sampleIdx < 0 || sampleIdx >= static_cast<int>(pointBudget)) {
+                            continue;
+                        }
+                        const float weight = kernel[k + 2];
+                        weighted += shadeValues[static_cast<size_t>(sampleIdx)] * weight;
+                        weightSum += weight;
+                    }
+                    smoothed[i] = (weightSum > 0.0f) ? (weighted / weightSum) : shadeValues[i];
+                }
+                shadeValues.swap(smoothed);
+
+                const float invCount = 1.0f / static_cast<float>(pointBudget - 1);
+                for (size_t i = 0; i < pointBudget; ++i) {
+                    const float progress = static_cast<float>(i) * invCount;
+                    const float distanceToEnd = std::min(progress, 1.0f - progress);
+                    float fade = 1.0f;
+                    if (distanceToEnd < SHADOW_ENDPOINT_RATIO) {
+                        float t = distanceToEnd / SHADOW_ENDPOINT_RATIO;
+                        t = std::clamp(t, 0.0f, 1.0f);
+                        fade = t * t * (3.0f - 2.0f * t);
+                    }
+                    shadeValues[i] = 1.0f - (1.0f - shadeValues[i]) * fade;
+                    shadeValues[i] = std::clamp(shadeValues[i], 0.05f, 1.0f);
+                }
+            }
+        }
+
         const size_t startIndex = vertexBuffer.size() / chunk.stride;
         size_t emittedPoints = 0;
 
@@ -652,7 +744,7 @@ void GLFiberRenderer::buildChunksForStyle(GLFiberData::TractStyle style,
             float dirZ = 0.0f;
             computeDirection(track, i, dirX, dirY, dirZ);
 
-            float shadeFactor = shadeFn ? shadeFn(track[i].x, track[i].y, track[i].z) : 1.0f;
+            const float shadeFactor = shadeValues.empty() ? 1.0f : shadeValues[i];
 
             vertexBuffer.push_back(track[i].x);
             vertexBuffer.push_back(track[i].y);
